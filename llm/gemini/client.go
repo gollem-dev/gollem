@@ -140,6 +140,10 @@ func WithStopSequences(stopSequences []string) Option {
 
 // WithThinkingBudget sets the thinking budget for text generation.
 // A value of -1 enables automatic thinking budget allocation.
+//
+// Gemini 3.x deprecates thinking_budget in favor of thinking_level; prefer
+// WithThinkingLevel for those models. The two options are mutually exclusive
+// at the API layer, so calling this clears any thinking level previously set.
 func WithThinkingBudget(budget int32) Option {
 	return func(c *Client) {
 		if c.generationConfig == nil {
@@ -149,6 +153,29 @@ func WithThinkingBudget(budget int32) Option {
 			c.generationConfig.ThinkingConfig = &genai.ThinkingConfig{}
 		}
 		c.generationConfig.ThinkingConfig.ThinkingBudget = &budget
+		c.generationConfig.ThinkingConfig.ThinkingLevel = ""
+	}
+}
+
+// WithThinkingLevel sets the thinking level for text generation.
+// Introduced in Gemini 3.x as the replacement for WithThinkingBudget.
+//
+// Valid values: genai.ThinkingLevelMinimal, ThinkingLevelLow,
+// ThinkingLevelMedium, ThinkingLevelHigh.
+//
+// Vertex AI rejects requests that carry both thinking_budget and thinking_level
+// (HTTP 400), so calling this clears any thinking budget previously set,
+// including the zero-value default established by gemini.New.
+func WithThinkingLevel(level genai.ThinkingLevel) Option {
+	return func(c *Client) {
+		if c.generationConfig == nil {
+			c.generationConfig = &genai.GenerateContentConfig{}
+		}
+		if c.generationConfig.ThinkingConfig == nil {
+			c.generationConfig.ThinkingConfig = &genai.ThinkingConfig{}
+		}
+		c.generationConfig.ThinkingConfig.ThinkingLevel = level
+		c.generationConfig.ThinkingConfig.ThinkingBudget = nil
 	}
 }
 
@@ -385,7 +412,7 @@ func processResponse(resp *genai.GenerateContentResponse) (*gollem.Response, err
 	response := &gollem.Response{
 		Texts:         make([]string, 0),
 		FunctionCalls: make([]*gollem.FunctionCall, 0),
-		Thoughts:     make([]string, 0),
+		Thoughts:      make([]string, 0),
 	}
 
 	// Extract token counts from UsageMetadata if available

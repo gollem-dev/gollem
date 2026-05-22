@@ -395,6 +395,90 @@ func TestWithThinkingBudget(t *testing.T) {
 	}
 }
 
+func TestWithThinkingLevel(t *testing.T) {
+	projectID := os.Getenv("TEST_GCP_PROJECT_ID")
+	if projectID == "" {
+		t.Skip("TEST_GCP_PROJECT_ID is not set")
+	}
+
+	location := os.Getenv("TEST_GCP_LOCATION")
+	if location == "" {
+		t.Skip("TEST_GCP_LOCATION is not set")
+	}
+
+	ctx := context.Background()
+
+	testCases := []struct {
+		name        string
+		level       genai.ThinkingLevel
+		expectLevel genai.ThinkingLevel
+	}{
+		{
+			name:        "minimal",
+			level:       genai.ThinkingLevelMinimal,
+			expectLevel: genai.ThinkingLevelMinimal,
+		},
+		{
+			name:        "low",
+			level:       genai.ThinkingLevelLow,
+			expectLevel: genai.ThinkingLevelLow,
+		},
+		{
+			name:        "medium",
+			level:       genai.ThinkingLevelMedium,
+			expectLevel: genai.ThinkingLevelMedium,
+		},
+		{
+			name:        "high",
+			level:       genai.ThinkingLevelHigh,
+			expectLevel: genai.ThinkingLevelHigh,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := gemini.New(ctx, projectID, location,
+				gemini.WithThinkingLevel(tc.level),
+			)
+			gt.NoError(t, err)
+			gt.NotNil(t, client)
+
+			generationConfig := client.GetGenerationConfig()
+			gt.NotNil(t, generationConfig)
+			gt.NotNil(t, generationConfig.ThinkingConfig)
+			gt.Equal(t, tc.expectLevel, generationConfig.ThinkingConfig.ThinkingLevel)
+			// Vertex AI rejects requests that carry both fields; the option
+			// must clear the default-zero ThinkingBudget that gemini.New sets.
+			gt.Nil(t, generationConfig.ThinkingConfig.ThinkingBudget)
+		})
+	}
+
+	t.Run("budget overrides level", func(t *testing.T) {
+		client, err := gemini.New(ctx, projectID, location,
+			gemini.WithThinkingLevel(genai.ThinkingLevelHigh),
+			gemini.WithThinkingBudget(500),
+		)
+		gt.NoError(t, err)
+
+		cfg := client.GetGenerationConfig()
+		gt.NotNil(t, cfg.ThinkingConfig.ThinkingBudget)
+		gt.Equal(t, int32(500), *cfg.ThinkingConfig.ThinkingBudget)
+		gt.Equal(t, genai.ThinkingLevel(""), cfg.ThinkingConfig.ThinkingLevel)
+	})
+
+	t.Run("level overrides budget", func(t *testing.T) {
+		client, err := gemini.New(ctx, projectID, location,
+			gemini.WithThinkingBudget(500),
+			gemini.WithThinkingLevel(genai.ThinkingLevelLow),
+		)
+		gt.NoError(t, err)
+
+		cfg := client.GetGenerationConfig()
+		gt.Nil(t, cfg.ThinkingConfig.ThinkingBudget)
+		gt.Equal(t, genai.ThinkingLevelLow, cfg.ThinkingConfig.ThinkingLevel)
+	})
+}
+
 func TestThinkingBudgetIntegration(t *testing.T) {
 	projectID := os.Getenv("TEST_GCP_PROJECT_ID")
 	if projectID == "" {
@@ -782,6 +866,60 @@ func TestGeminiContentGenerateWithModel(t *testing.T) {
 		gt.NoError(t, err)
 		gt.A(t, resp2.Texts).Length(1).Required()
 	}
+}
+
+// TestGemini35FlashStrictMatchIntegration exercises the Gemini 3.x strict
+// FunctionCall/FunctionResponse id-matching contract end-to-end against a real
+// gemini-3.5-flash deployment. The previous unit tests confirm round-trip on
+// the conversion layer, but only a live call can prove that:
+//
+//  1. Gemini 3.x actually populates FunctionCall.ID, and
+//  2. echoing that ID back via FunctionResponse keeps the model happy.
+//
+// Gated on TEST_GCP_PROJECT_ID / TEST_GCP_LOCATION so that contributors without
+// Vertex AI access can still run `go test ./...`.
+func TestGemini35FlashStrictMatchIntegration(t *testing.T) {
+	projectID := os.Getenv("TEST_GCP_PROJECT_ID")
+	if projectID == "" {
+		t.Skip("TEST_GCP_PROJECT_ID is not set")
+	}
+	location := os.Getenv("TEST_GCP_LOCATION")
+	if location == "" {
+		t.Skip("TEST_GCP_LOCATION is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	client, err := gemini.New(ctx, projectID, location,
+		gemini.WithModel("gemini-3.5-flash"),
+		gemini.WithThinkingLevel(genai.ThinkingLevelMinimal),
+	)
+	gt.NoError(t, err)
+
+	tool := &writeFileTool{}
+	session, err := client.NewSession(ctx, gollem.WithSessionTools(tool))
+	gt.NoError(t, err)
+
+	resp1, err := session.Generate(ctx, []gollem.Input{
+		gollem.Text("Please call the write_file tool with path 'test.txt' and content 'hello world'. Just call the tool, don't explain."),
+	}, gollem.WithMaxTokens(maxTestTokens))
+	gt.NoError(t, err).Required()
+	gt.A(t, resp1.FunctionCalls).Longer(0).Required()
+
+	fc := resp1.FunctionCalls[0]
+	// Gemini 3.x is expected to issue a real FunctionCall.ID. The fallback id
+	// gollem fabricates for older models starts with the "call_" prefix and the
+	// function name; a genuine Gemini 3.x id should not collide with that.
+	gt.Value(t, fc.ID).NotEqual("")
+
+	resp2, err := session.Generate(ctx, []gollem.Input{gollem.FunctionResponse{
+		ID:   fc.ID,
+		Name: fc.Name,
+		Data: map[string]any{"status": "success", "path": "test.txt"},
+	}}, gollem.WithMaxTokens(maxTestTokens))
+	gt.NoError(t, err).Required()
+	gt.A(t, resp2.Texts).Longer(0)
 }
 
 // writeFileTool is a simple tool for integration testing

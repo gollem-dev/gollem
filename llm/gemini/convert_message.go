@@ -178,8 +178,15 @@ func convertGeminiPart(part *genai.Part) (gollem.MessageContent, error) {
 
 	// Function call
 	if part.FunctionCall != nil {
+		// Gemini 3.x returns FunctionCall.ID and requires strict id matching on the
+		// corresponding FunctionResponse. Older Gemini models leave ID empty, so fall
+		// back to a deterministic id derived from the function name.
+		id := part.FunctionCall.ID
+		if id == "" {
+			id = convert.GenerateToolCallID(part.FunctionCall.Name, 0)
+		}
 		mc, err := gollem.NewToolCallContent(
-			convert.GenerateToolCallID(part.FunctionCall.Name, 0),
+			id,
 			part.FunctionCall.Name,
 			part.FunctionCall.Args,
 		)
@@ -192,8 +199,12 @@ func convertGeminiPart(part *genai.Part) (gollem.MessageContent, error) {
 
 	// Function response
 	if part.FunctionResponse != nil {
+		id := part.FunctionResponse.ID
+		if id == "" {
+			id = convert.GenerateToolCallID(part.FunctionResponse.Name, 0)
+		}
 		return gollem.NewToolResponseContent(
-			convert.GenerateToolCallID(part.FunctionResponse.Name, 0),
+			id,
 			part.FunctionResponse.Name,
 			part.FunctionResponse.Response,
 			false,
@@ -357,8 +368,15 @@ func convertContentToGemini(content gollem.MessageContent) (*genai.Part, error) 
 		if err != nil {
 			return nil, err
 		}
+		// Skip the synthesized fallback id; it is internal to gollem and would
+		// not match anything Gemini 3.x issued, causing strict-match failures.
+		id := toolCall.ID
+		if id == convert.GenerateToolCallID(toolCall.Name, 0) {
+			id = ""
+		}
 		return &genai.Part{
 			FunctionCall: &genai.FunctionCall{
+				ID:   id,
 				Name: toolCall.Name,
 				Args: toolCall.Arguments,
 			},
@@ -370,8 +388,13 @@ func convertContentToGemini(content gollem.MessageContent) (*genai.Part, error) 
 		if err != nil {
 			return nil, err
 		}
+		id := toolResp.ToolCallID
+		if id == convert.GenerateToolCallID(toolResp.Name, 0) {
+			id = ""
+		}
 		return &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{
+				ID:       id,
 				Name:     toolResp.Name,
 				Response: toolResp.Response,
 			},
