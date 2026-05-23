@@ -16,7 +16,10 @@ import (
 )
 
 const (
-	DefaultModel          = "gemini-2.5-flash"
+	// DefaultModel is the Gemini model used when no WithModel option is given.
+	// gemini-3.5-flash is chosen so the default ThinkingLevelLow configuration
+	// is accepted; Gemini 2.x callers should pass WithModel + WithThinkingBudget.
+	DefaultModel          = "gemini-3.5-flash"
 	DefaultEmbeddingModel = "text-embedding-004"
 )
 
@@ -55,7 +58,7 @@ type Client struct {
 type Option func(*Client)
 
 // WithModel sets the model to use for text generation.
-// Default: "gemini-2.0-flash"
+// Default: "gemini-3.5-flash"
 func WithModel(model string) Option {
 	return func(c *Client) {
 		c.defaultModel = model

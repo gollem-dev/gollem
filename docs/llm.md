@@ -46,7 +46,7 @@ client, err := gemini.New(ctx, projectID, location,
 )
 ```
 
-Available models:
+Available models (default: `gemini-3.5-flash`):
 - `gemini-3.5-flash` - Latest Flash model with improved agent execution and coding (uses thinking levels)
 - `gemini-2.5-pro` - Advanced model with state-of-the-art thinking capabilities
 - `gemini-2.5-flash` - Strong price-performance model with well-rounded capabilities
