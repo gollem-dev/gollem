@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/gollem"
@@ -379,9 +378,18 @@ func (s *Session) convertInputs(input ...gollem.Input) ([]*genai.Part, error) {
 				},
 			})
 		case gollem.FunctionResponse:
+			// Propagate the FunctionResponse id so Gemini 3.x can match it back
+			// to the corresponding FunctionCall. If the id is a gollem-internal
+			// fallback, strip it — feeding Gemini a fabricated id would break
+			// strict matching just as badly as no id at all.
+			id := v.ID
+			if isGeminiFallbackToolCallID(id) {
+				id = ""
+			}
 			if v.Error != nil {
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
+						ID:   id,
 						Name: v.Name,
 						Response: map[string]any{
 							"error_message": fmt.Sprintf("%+v", v.Error),
@@ -391,6 +399,7 @@ func (s *Session) convertInputs(input ...gollem.Input) ([]*genai.Part, error) {
 			} else {
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
+						ID:       id,
 						Name:     v.Name,
 						Response: v.Data,
 					},
@@ -449,8 +458,17 @@ func processResponse(resp *genai.GenerateContentResponse) (*gollem.Response, err
 			}
 
 			if part.FunctionCall != nil {
+				// Gemini 3.x returns FunctionCall.ID. Preserve it so the caller
+				// can echo it back via FunctionResponse for strict matching.
+				// For older models that leave it empty, synthesize a fallback
+				// that the conversion layer will strip on the way back to
+				// Gemini.
+				id := part.FunctionCall.ID
+				if id == "" {
+					id = geminiFallbackToolCallID(part.FunctionCall.Name, len(response.FunctionCalls))
+				}
 				fc := &gollem.FunctionCall{
-					ID:        fmt.Sprintf("%s_%d", part.FunctionCall.Name, time.Now().UnixNano()),
+					ID:        id,
 					Name:      part.FunctionCall.Name,
 					Arguments: part.FunctionCall.Args,
 				}

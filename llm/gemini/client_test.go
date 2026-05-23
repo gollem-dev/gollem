@@ -868,16 +868,22 @@ func TestGeminiContentGenerateWithModel(t *testing.T) {
 	}
 }
 
-// TestGemini35FlashStrictMatchIntegration exercises the Gemini 3.x strict
-// FunctionCall/FunctionResponse id-matching contract end-to-end against a real
-// gemini-3.5-flash deployment. The previous unit tests confirm round-trip on
-// the conversion layer, but only a live call can prove that:
+// TestGemini35FlashStrictMatchIntegration exercises the function-calling
+// round trip end-to-end against a real gemini-3.5-flash deployment. The unit
+// tests in TestProcessResponseFunctionCallIDPreserved and
+// TestSessionFunctionResponseIDPropagation cover the behavior on the
+// conversion layer when Gemini issues a real id; this test only proves that
+// the live path (`Generate` + tool round trip) succeeds for 3.5-flash with
+// the new WithThinkingLevel option.
 //
-//  1. Gemini 3.x actually populates FunctionCall.ID, and
-//  2. echoing that ID back via FunctionResponse keeps the model happy.
+// Note: as of writing, the Vertex AI deployment of gemini-3.5-flash returns
+// FunctionCall.ID="" — strict id matching is therefore implicitly satisfied
+// by both call and response carrying an empty wire id. The test does not
+// assert on the id being real; it verifies that whatever id gollem stamps
+// (real or fallback) survives the round trip.
 //
-// Gated on TEST_GCP_PROJECT_ID / TEST_GCP_LOCATION so that contributors without
-// Vertex AI access can still run `go test ./...`.
+// Gated on TEST_GCP_PROJECT_ID / TEST_GCP_LOCATION so that contributors
+// without Vertex AI access can still run `go test ./...`.
 func TestGemini35FlashStrictMatchIntegration(t *testing.T) {
 	projectID := os.Getenv("TEST_GCP_PROJECT_ID")
 	if projectID == "" {
@@ -908,9 +914,9 @@ func TestGemini35FlashStrictMatchIntegration(t *testing.T) {
 	gt.A(t, resp1.FunctionCalls).Longer(0).Required()
 
 	fc := resp1.FunctionCalls[0]
-	// Gemini 3.x is expected to issue a real FunctionCall.ID. The fallback id
-	// gollem fabricates for older models starts with the "call_" prefix and the
-	// function name; a genuine Gemini 3.x id should not collide with that.
+	// gollem always exposes a non-empty id to the caller — either the one
+	// Gemini issued or a fabricated fallback. Either way the same id must
+	// flow back into FunctionResponse below for strict matching to hold.
 	gt.Value(t, fc.ID).NotEqual("")
 
 	resp2, err := session.Generate(ctx, []gollem.Input{gollem.FunctionResponse{
@@ -1256,4 +1262,116 @@ func TestContentsToTraceMessages(t *testing.T) {
 			}},
 		},
 	}))
+}
+
+// TestProcessResponseFunctionCallIDPreserved verifies that processResponse
+// keeps the real FunctionCall.ID issued by Gemini 3.x intact and only
+// synthesizes a fallback when the API returns an empty id.
+func TestProcessResponseFunctionCallIDPreserved(t *testing.T) {
+	t.Run("real id preserved", func(t *testing.T) {
+		resp, err := gemini.ProcessResponse(&genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							ID:   "gemini-real-id-xyz",
+							Name: "lookup",
+							Args: map[string]any{"q": "a"},
+						},
+					}},
+				},
+			}},
+		})
+		gt.NoError(t, err)
+		gt.A(t, resp.FunctionCalls).Length(1).Required()
+		gt.Value(t, resp.FunctionCalls[0].ID).Equal("gemini-real-id-xyz")
+		gt.Value(t, gemini.IsGeminiFallbackToolCallID(resp.FunctionCalls[0].ID)).Equal(false)
+	})
+
+	t.Run("empty id gets fallback", func(t *testing.T) {
+		resp, err := gemini.ProcessResponse(&genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{FunctionCall: &genai.FunctionCall{Name: "lookup", Args: map[string]any{"q": "a"}}},
+						{FunctionCall: &genai.FunctionCall{Name: "lookup", Args: map[string]any{"q": "b"}}},
+					},
+				},
+			}},
+		})
+		gt.NoError(t, err)
+		gt.A(t, resp.FunctionCalls).Length(2).Required()
+		// Both ids must be non-empty, carry the fallback prefix, and differ
+		// from each other so that same-name parallel calls stay distinct.
+		gt.Value(t, gemini.IsGeminiFallbackToolCallID(resp.FunctionCalls[0].ID)).Equal(true)
+		gt.Value(t, gemini.IsGeminiFallbackToolCallID(resp.FunctionCalls[1].ID)).Equal(true)
+		gt.Value(t, resp.FunctionCalls[0].ID).NotEqual(resp.FunctionCalls[1].ID)
+	})
+}
+
+// TestSessionFunctionResponseIDPropagation verifies that gollem.FunctionResponse
+// ids passed to Generate flow through to genai.FunctionResponse.ID on the wire
+// (with the gollem-internal fallback prefix stripped, since Gemini did not
+// originally issue those ids).
+func TestSessionFunctionResponseIDPropagation(t *testing.T) {
+	type capture struct {
+		funcResponseID string
+		seen           bool
+	}
+
+	build := func(c *capture) *apiClientMock {
+		return &apiClientMock{
+			GenerateContentFunc: func(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+				for _, content := range contents {
+					for _, part := range content.Parts {
+						if part.FunctionResponse != nil {
+							c.funcResponseID = part.FunctionResponse.ID
+							c.seen = true
+						}
+					}
+				}
+				return &genai.GenerateContentResponse{
+					Candidates: []*genai.Candidate{{
+						Content: &genai.Content{
+							Role:  "model",
+							Parts: []*genai.Part{{Text: "ok"}},
+						},
+					}},
+					UsageMetadata: &genai.GenerateContentResponseUsageMetadata{},
+				}, nil
+			},
+		}
+	}
+
+	t.Run("real id propagates to wire", func(t *testing.T) {
+		var c capture
+		session, err := gemini.NewSessionWithAPIClient(build(&c), gollem.NewSessionConfig(), "gemini-3.5-flash")
+		gt.NoError(t, err)
+
+		_, err = session.Generate(context.Background(), []gollem.Input{gollem.FunctionResponse{
+			ID:   "real-id-from-gemini",
+			Name: "lookup",
+			Data: map[string]any{"result": "ok"},
+		}})
+		gt.NoError(t, err)
+		gt.Value(t, c.seen).Equal(true)
+		gt.Value(t, c.funcResponseID).Equal("real-id-from-gemini")
+	})
+
+	t.Run("fallback id stripped on wire", func(t *testing.T) {
+		var c capture
+		session, err := gemini.NewSessionWithAPIClient(build(&c), gollem.NewSessionConfig(), "gemini-3.5-flash")
+		gt.NoError(t, err)
+
+		_, err = session.Generate(context.Background(), []gollem.Input{gollem.FunctionResponse{
+			ID:   gemini.GeminiFallbackToolCallID("lookup", 0),
+			Name: "lookup",
+			Data: map[string]any{"result": "ok"},
+		}})
+		gt.NoError(t, err)
+		gt.Value(t, c.seen).Equal(true)
+		gt.Value(t, c.funcResponseID).Equal("")
+	})
 }

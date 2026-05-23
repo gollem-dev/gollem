@@ -439,7 +439,7 @@ func TestGeminiToOpenAIConversion(t *testing.T) {
 			{
 				Role: "assistant",
 				ToolCalls: []openaiSDK.ToolCall{{
-					ID:   "call_search_0",
+					ID:   "gemini-fallback-search-0",
 					Type: "function",
 					Function: openaiSDK.FunctionCall{
 						Name:      "search",
@@ -450,7 +450,7 @@ func TestGeminiToOpenAIConversion(t *testing.T) {
 			{
 				Role:       "tool",
 				Content:    `{"results":[{"title":"Python Basics","url":"https://example.com/1"},{"title":"Learn Python","url":"https://example.com/2"}],"total":2}`,
-				ToolCallID: "call_search_0",
+				ToolCallID: "gemini-fallback-search-0",
 				Name:       "search",
 			},
 			{Role: "assistant", Content: "I found 2 Python tutorials for beginners."},
