@@ -7,10 +7,13 @@ import (
 
 // Export convert functions for testing
 var (
-	ConvertTool              = convertTool
-	ConvertParameterToSchema = convertParameterToSchema
-	TokenLimitErrorOptions   = tokenLimitErrorOptions
-	ContentsToTraceMessages  = contentsToTraceMessages
+	ConvertTool                = convertTool
+	ConvertParameterToSchema   = convertParameterToSchema
+	TokenLimitErrorOptions     = tokenLimitErrorOptions
+	ContentsToTraceMessages    = contentsToTraceMessages
+	GeminiFallbackToolCallID   = geminiFallbackToolCallID
+	IsGeminiFallbackToolCallID = isGeminiFallbackToolCallID
+	ProcessResponse            = processResponse
 )
 
 // GetGenerationConfig returns the generationConfig for testing

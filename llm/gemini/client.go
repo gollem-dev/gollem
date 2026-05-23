@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/gollem"
@@ -17,7 +16,10 @@ import (
 )
 
 const (
-	DefaultModel          = "gemini-2.5-flash"
+	// DefaultModel is the Gemini model used when no WithModel option is given.
+	// gemini-3.5-flash is chosen so the default ThinkingLevelLow configuration
+	// is accepted; Gemini 2.x callers should pass WithModel + WithThinkingBudget.
+	DefaultModel          = "gemini-3.5-flash"
 	DefaultEmbeddingModel = "text-embedding-004"
 )
 
@@ -56,7 +58,7 @@ type Client struct {
 type Option func(*Client)
 
 // WithModel sets the model to use for text generation.
-// Default: "gemini-2.0-flash"
+// Default: "gemini-3.5-flash"
 func WithModel(model string) Option {
 	return func(c *Client) {
 		c.defaultModel = model
@@ -140,6 +142,10 @@ func WithStopSequences(stopSequences []string) Option {
 
 // WithThinkingBudget sets the thinking budget for text generation.
 // A value of -1 enables automatic thinking budget allocation.
+//
+// Gemini 3.x deprecates thinking_budget in favor of thinking_level; prefer
+// WithThinkingLevel for those models. The two options are mutually exclusive
+// at the API layer, so calling this clears any thinking level previously set.
 func WithThinkingBudget(budget int32) Option {
 	return func(c *Client) {
 		if c.generationConfig == nil {
@@ -149,6 +155,29 @@ func WithThinkingBudget(budget int32) Option {
 			c.generationConfig.ThinkingConfig = &genai.ThinkingConfig{}
 		}
 		c.generationConfig.ThinkingConfig.ThinkingBudget = &budget
+		c.generationConfig.ThinkingConfig.ThinkingLevel = ""
+	}
+}
+
+// WithThinkingLevel sets the thinking level for text generation.
+// Introduced in Gemini 3.x as the replacement for WithThinkingBudget.
+//
+// Valid values: genai.ThinkingLevelMinimal, ThinkingLevelLow,
+// ThinkingLevelMedium, ThinkingLevelHigh.
+//
+// Vertex AI rejects requests that carry both thinking_budget and thinking_level
+// (HTTP 400), so calling this clears any thinking budget previously set,
+// including the zero-value default established by gemini.New.
+func WithThinkingLevel(level genai.ThinkingLevel) Option {
+	return func(c *Client) {
+		if c.generationConfig == nil {
+			c.generationConfig = &genai.GenerateContentConfig{}
+		}
+		if c.generationConfig.ThinkingConfig == nil {
+			c.generationConfig.ThinkingConfig = &genai.ThinkingConfig{}
+		}
+		c.generationConfig.ThinkingConfig.ThinkingLevel = level
+		c.generationConfig.ThinkingConfig.ThinkingBudget = nil
 	}
 }
 
@@ -169,6 +198,10 @@ func WithContentType(contentType gollem.ContentType) Option {
 
 // New creates a new client for the Gemini API.
 // It requires a project ID and location, and can be configured with additional options.
+//
+// The default thinking configuration is ThinkingLevelLow, which works with
+// Gemini 3.x models. Callers using Gemini 2.x models that do not support
+// thinking_level should override this via WithThinkingBudget.
 func New(ctx context.Context, projectID, location string, options ...Option) (*Client, error) {
 	if projectID == "" {
 		return nil, goerr.New("projectID is required")
@@ -176,8 +209,6 @@ func New(ctx context.Context, projectID, location string, options ...Option) (*C
 	if location == "" {
 		return nil, goerr.New("location is required")
 	}
-
-	var budget int32 = 0
 
 	client := &Client{
 		projectID:      projectID,
@@ -187,7 +218,7 @@ func New(ctx context.Context, projectID, location string, options ...Option) (*C
 		contentType:    gollem.ContentTypeText,
 		generationConfig: &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: &budget,
+				ThinkingLevel: genai.ThinkingLevelLow,
 			},
 		},
 	}
@@ -352,9 +383,18 @@ func (s *Session) convertInputs(input ...gollem.Input) ([]*genai.Part, error) {
 				},
 			})
 		case gollem.FunctionResponse:
+			// Propagate the FunctionResponse id so Gemini 3.x can match it back
+			// to the corresponding FunctionCall. If the id is a gollem-internal
+			// fallback, strip it — feeding Gemini a fabricated id would break
+			// strict matching just as badly as no id at all.
+			id := v.ID
+			if isGeminiFallbackToolCallID(id) {
+				id = ""
+			}
 			if v.Error != nil {
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
+						ID:   id,
 						Name: v.Name,
 						Response: map[string]any{
 							"error_message": fmt.Sprintf("%+v", v.Error),
@@ -364,6 +404,7 @@ func (s *Session) convertInputs(input ...gollem.Input) ([]*genai.Part, error) {
 			} else {
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
+						ID:       id,
 						Name:     v.Name,
 						Response: v.Data,
 					},
@@ -422,8 +463,17 @@ func processResponse(resp *genai.GenerateContentResponse) (*gollem.Response, err
 			}
 
 			if part.FunctionCall != nil {
+				// Gemini 3.x returns FunctionCall.ID. Preserve it so the caller
+				// can echo it back via FunctionResponse for strict matching.
+				// For older models that leave it empty, synthesize a fallback
+				// that the conversion layer will strip on the way back to
+				// Gemini.
+				id := part.FunctionCall.ID
+				if id == "" {
+					id = geminiFallbackToolCallID(part.FunctionCall.Name, len(response.FunctionCalls))
+				}
 				fc := &gollem.FunctionCall{
-					ID:        fmt.Sprintf("%s_%d", part.FunctionCall.Name, time.Now().UnixNano()),
+					ID:        id,
 					Name:      part.FunctionCall.Name,
 					Arguments: part.FunctionCall.Args,
 				}

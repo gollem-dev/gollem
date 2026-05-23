@@ -395,6 +395,90 @@ func TestWithThinkingBudget(t *testing.T) {
 	}
 }
 
+func TestWithThinkingLevel(t *testing.T) {
+	projectID := os.Getenv("TEST_GCP_PROJECT_ID")
+	if projectID == "" {
+		t.Skip("TEST_GCP_PROJECT_ID is not set")
+	}
+
+	location := os.Getenv("TEST_GCP_LOCATION")
+	if location == "" {
+		t.Skip("TEST_GCP_LOCATION is not set")
+	}
+
+	ctx := context.Background()
+
+	testCases := []struct {
+		name        string
+		level       genai.ThinkingLevel
+		expectLevel genai.ThinkingLevel
+	}{
+		{
+			name:        "minimal",
+			level:       genai.ThinkingLevelMinimal,
+			expectLevel: genai.ThinkingLevelMinimal,
+		},
+		{
+			name:        "low",
+			level:       genai.ThinkingLevelLow,
+			expectLevel: genai.ThinkingLevelLow,
+		},
+		{
+			name:        "medium",
+			level:       genai.ThinkingLevelMedium,
+			expectLevel: genai.ThinkingLevelMedium,
+		},
+		{
+			name:        "high",
+			level:       genai.ThinkingLevelHigh,
+			expectLevel: genai.ThinkingLevelHigh,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := gemini.New(ctx, projectID, location,
+				gemini.WithThinkingLevel(tc.level),
+			)
+			gt.NoError(t, err)
+			gt.NotNil(t, client)
+
+			generationConfig := client.GetGenerationConfig()
+			gt.NotNil(t, generationConfig)
+			gt.NotNil(t, generationConfig.ThinkingConfig)
+			gt.Equal(t, tc.expectLevel, generationConfig.ThinkingConfig.ThinkingLevel)
+			// Vertex AI rejects requests that carry both fields; the option
+			// must clear the default-zero ThinkingBudget that gemini.New sets.
+			gt.Nil(t, generationConfig.ThinkingConfig.ThinkingBudget)
+		})
+	}
+
+	t.Run("budget overrides level", func(t *testing.T) {
+		client, err := gemini.New(ctx, projectID, location,
+			gemini.WithThinkingLevel(genai.ThinkingLevelHigh),
+			gemini.WithThinkingBudget(500),
+		)
+		gt.NoError(t, err)
+
+		cfg := client.GetGenerationConfig()
+		gt.NotNil(t, cfg.ThinkingConfig.ThinkingBudget)
+		gt.Equal(t, int32(500), *cfg.ThinkingConfig.ThinkingBudget)
+		gt.Equal(t, genai.ThinkingLevel(""), cfg.ThinkingConfig.ThinkingLevel)
+	})
+
+	t.Run("level overrides budget", func(t *testing.T) {
+		client, err := gemini.New(ctx, projectID, location,
+			gemini.WithThinkingBudget(500),
+			gemini.WithThinkingLevel(genai.ThinkingLevelLow),
+		)
+		gt.NoError(t, err)
+
+		cfg := client.GetGenerationConfig()
+		gt.Nil(t, cfg.ThinkingConfig.ThinkingBudget)
+		gt.Equal(t, genai.ThinkingLevelLow, cfg.ThinkingConfig.ThinkingLevel)
+	})
+}
+
 func TestThinkingBudgetIntegration(t *testing.T) {
 	projectID := os.Getenv("TEST_GCP_PROJECT_ID")
 	if projectID == "" {
@@ -784,6 +868,66 @@ func TestGeminiContentGenerateWithModel(t *testing.T) {
 	}
 }
 
+// TestGemini35FlashStrictMatchIntegration exercises the function-calling
+// round trip end-to-end against a real gemini-3.5-flash deployment. The unit
+// tests in TestProcessResponseFunctionCallIDPreserved and
+// TestSessionFunctionResponseIDPropagation cover the behavior on the
+// conversion layer when Gemini issues a real id; this test only proves that
+// the live path (`Generate` + tool round trip) succeeds for 3.5-flash with
+// the new WithThinkingLevel option.
+//
+// Note: as of writing, the Vertex AI deployment of gemini-3.5-flash returns
+// FunctionCall.ID="" — strict id matching is therefore implicitly satisfied
+// by both call and response carrying an empty wire id. The test does not
+// assert on the id being real; it verifies that whatever id gollem stamps
+// (real or fallback) survives the round trip.
+//
+// Gated on TEST_GCP_PROJECT_ID / TEST_GCP_LOCATION so that contributors
+// without Vertex AI access can still run `go test ./...`.
+func TestGemini35FlashStrictMatchIntegration(t *testing.T) {
+	projectID := os.Getenv("TEST_GCP_PROJECT_ID")
+	if projectID == "" {
+		t.Skip("TEST_GCP_PROJECT_ID is not set")
+	}
+	location := os.Getenv("TEST_GCP_LOCATION")
+	if location == "" {
+		t.Skip("TEST_GCP_LOCATION is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	client, err := gemini.New(ctx, projectID, location,
+		gemini.WithModel("gemini-3.5-flash"),
+		gemini.WithThinkingLevel(genai.ThinkingLevelMinimal),
+	)
+	gt.NoError(t, err)
+
+	tool := &writeFileTool{}
+	session, err := client.NewSession(ctx, gollem.WithSessionTools(tool))
+	gt.NoError(t, err)
+
+	resp1, err := session.Generate(ctx, []gollem.Input{
+		gollem.Text("Please call the write_file tool with path 'test.txt' and content 'hello world'. Just call the tool, don't explain."),
+	}, gollem.WithMaxTokens(maxTestTokens))
+	gt.NoError(t, err).Required()
+	gt.A(t, resp1.FunctionCalls).Longer(0).Required()
+
+	fc := resp1.FunctionCalls[0]
+	// gollem always exposes a non-empty id to the caller — either the one
+	// Gemini issued or a fabricated fallback. Either way the same id must
+	// flow back into FunctionResponse below for strict matching to hold.
+	gt.Value(t, fc.ID).NotEqual("")
+
+	resp2, err := session.Generate(ctx, []gollem.Input{gollem.FunctionResponse{
+		ID:   fc.ID,
+		Name: fc.Name,
+		Data: map[string]any{"status": "success", "path": "test.txt"},
+	}}, gollem.WithMaxTokens(maxTestTokens))
+	gt.NoError(t, err).Required()
+	gt.A(t, resp2.Texts).Longer(0)
+}
+
 // writeFileTool is a simple tool for integration testing
 type writeFileTool struct{}
 
@@ -1118,6 +1262,118 @@ func TestContentsToTraceMessages(t *testing.T) {
 			}},
 		},
 	}))
+}
+
+// TestProcessResponseFunctionCallIDPreserved verifies that processResponse
+// keeps the real FunctionCall.ID issued by Gemini 3.x intact and only
+// synthesizes a fallback when the API returns an empty id.
+func TestProcessResponseFunctionCallIDPreserved(t *testing.T) {
+	t.Run("real id preserved", func(t *testing.T) {
+		resp, err := gemini.ProcessResponse(&genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							ID:   "gemini-real-id-xyz",
+							Name: "lookup",
+							Args: map[string]any{"q": "a"},
+						},
+					}},
+				},
+			}},
+		})
+		gt.NoError(t, err)
+		gt.A(t, resp.FunctionCalls).Length(1).Required()
+		gt.Value(t, resp.FunctionCalls[0].ID).Equal("gemini-real-id-xyz")
+		gt.Value(t, gemini.IsGeminiFallbackToolCallID(resp.FunctionCalls[0].ID)).Equal(false)
+	})
+
+	t.Run("empty id gets fallback", func(t *testing.T) {
+		resp, err := gemini.ProcessResponse(&genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{
+						{FunctionCall: &genai.FunctionCall{Name: "lookup", Args: map[string]any{"q": "a"}}},
+						{FunctionCall: &genai.FunctionCall{Name: "lookup", Args: map[string]any{"q": "b"}}},
+					},
+				},
+			}},
+		})
+		gt.NoError(t, err)
+		gt.A(t, resp.FunctionCalls).Length(2).Required()
+		// Both ids must be non-empty, carry the fallback prefix, and differ
+		// from each other so that same-name parallel calls stay distinct.
+		gt.Value(t, gemini.IsGeminiFallbackToolCallID(resp.FunctionCalls[0].ID)).Equal(true)
+		gt.Value(t, gemini.IsGeminiFallbackToolCallID(resp.FunctionCalls[1].ID)).Equal(true)
+		gt.Value(t, resp.FunctionCalls[0].ID).NotEqual(resp.FunctionCalls[1].ID)
+	})
+}
+
+// TestSessionFunctionResponseIDPropagation verifies that gollem.FunctionResponse
+// ids passed to Generate flow through to genai.FunctionResponse.ID on the wire
+// (with the gollem-internal fallback prefix stripped, since Gemini did not
+// originally issue those ids).
+func TestSessionFunctionResponseIDPropagation(t *testing.T) {
+	type capture struct {
+		funcResponseID string
+		seen           bool
+	}
+
+	build := func(c *capture) *apiClientMock {
+		return &apiClientMock{
+			GenerateContentFunc: func(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+				for _, content := range contents {
+					for _, part := range content.Parts {
+						if part.FunctionResponse != nil {
+							c.funcResponseID = part.FunctionResponse.ID
+							c.seen = true
+						}
+					}
+				}
+				return &genai.GenerateContentResponse{
+					Candidates: []*genai.Candidate{{
+						Content: &genai.Content{
+							Role:  "model",
+							Parts: []*genai.Part{{Text: "ok"}},
+						},
+					}},
+					UsageMetadata: &genai.GenerateContentResponseUsageMetadata{},
+				}, nil
+			},
+		}
+	}
+
+	t.Run("real id propagates to wire", func(t *testing.T) {
+		var c capture
+		session, err := gemini.NewSessionWithAPIClient(build(&c), gollem.NewSessionConfig(), "gemini-3.5-flash")
+		gt.NoError(t, err)
+
+		_, err = session.Generate(context.Background(), []gollem.Input{gollem.FunctionResponse{
+			ID:   "real-id-from-gemini",
+			Name: "lookup",
+			Data: map[string]any{"result": "ok"},
+		}})
+		gt.NoError(t, err)
+		gt.Value(t, c.seen).Equal(true)
+		gt.Value(t, c.funcResponseID).Equal("real-id-from-gemini")
+	})
+
+	t.Run("fallback id stripped on wire", func(t *testing.T) {
+		var c capture
+		session, err := gemini.NewSessionWithAPIClient(build(&c), gollem.NewSessionConfig(), "gemini-3.5-flash")
+		gt.NoError(t, err)
+
+		_, err = session.Generate(context.Background(), []gollem.Input{gollem.FunctionResponse{
+			ID:   gemini.GeminiFallbackToolCallID("lookup", 0),
+			Name: "lookup",
+			Data: map[string]any{"result": "ok"},
+		}})
+		gt.NoError(t, err)
+		gt.Value(t, c.seen).Equal(true)
+		gt.Value(t, c.funcResponseID).Equal("")
+	})
 }
 
 // TestGeminiTraceRequestMessagesNewTurnOnly verifies that the trace's

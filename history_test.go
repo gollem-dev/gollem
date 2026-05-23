@@ -239,16 +239,18 @@ func TestClaudeToGeminiConversion(t *testing.T) {
 			{
 				Role: "model",
 				Parts: []*genai.Part{
-					{FunctionCall: &genai.FunctionCall{Name: "calculate", Args: map[string]any{"expression": "5+3"}}},
-					{FunctionCall: &genai.FunctionCall{Name: "calculate", Args: map[string]any{"expression": "10*2"}}},
+					// Claude's tool_use IDs must be propagated to Gemini for
+					// Gemini 3.x strict id matching.
+					{FunctionCall: &genai.FunctionCall{ID: "toolu_123", Name: "calculate", Args: map[string]any{"expression": "5+3"}}},
+					{FunctionCall: &genai.FunctionCall{ID: "toolu_456", Name: "calculate", Args: map[string]any{"expression": "10*2"}}},
 				},
 			},
 			{
 				Role: "user",
 				Parts: []*genai.Part{
 					// Claude now parses JSON, so result is properly structured
-					{FunctionResponse: &genai.FunctionResponse{Name: "", Response: map[string]any{"result": float64(8)}}},
-					{FunctionResponse: &genai.FunctionResponse{Name: "", Response: map[string]any{"result": float64(20)}}},
+					{FunctionResponse: &genai.FunctionResponse{ID: "toolu_123", Name: "", Response: map[string]any{"result": float64(8)}}},
+					{FunctionResponse: &genai.FunctionResponse{ID: "toolu_456", Name: "", Response: map[string]any{"result": float64(20)}}},
 				},
 			},
 			{Role: "model", Parts: []*genai.Part{{Text: "5+3 equals 8, and 10*2 equals 20."}}},
@@ -274,14 +276,14 @@ func TestClaudeToGeminiConversion(t *testing.T) {
 				Role: "model",
 				Parts: []*genai.Part{
 					{Text: "Here's a joke: Why did the chicken cross the road?"},
-					{FunctionCall: &genai.FunctionCall{Name: "get_current_time", Args: map[string]any{}}},
+					{FunctionCall: &genai.FunctionCall{ID: "toolu_789", Name: "get_current_time", Args: map[string]any{}}},
 				},
 			},
 			{
 				Role: "user",
 				Parts: []*genai.Part{
 					// Claude parses JSON response
-					{FunctionResponse: &genai.FunctionResponse{Name: "", Response: map[string]any{"time": "14:30:00", "timezone": "UTC"}}},
+					{FunctionResponse: &genai.FunctionResponse{ID: "toolu_789", Name: "", Response: map[string]any{"time": "14:30:00", "timezone": "UTC"}}},
 				},
 			},
 			{Role: "model", Parts: []*genai.Part{{Text: "It's currently 14:30 UTC."}}},
@@ -326,14 +328,14 @@ func TestClaudeToGeminiConversion(t *testing.T) {
 			{
 				Role: "model",
 				Parts: []*genai.Part{
-					{FunctionCall: &genai.FunctionCall{Name: "get_weather", Args: map[string]any{"location": "InvalidCity"}}},
+					{FunctionCall: &genai.FunctionCall{ID: "toolu_error", Name: "get_weather", Args: map[string]any{"location": "InvalidCity"}}},
 				},
 			},
 			{
 				Role: "user",
 				Parts: []*genai.Part{
 					// Error responses are also parsed as JSON
-					{FunctionResponse: &genai.FunctionResponse{Name: "", Response: map[string]any{"error": "City not found"}}},
+					{FunctionResponse: &genai.FunctionResponse{ID: "toolu_error", Name: "", Response: map[string]any{"error": "City not found"}}},
 				},
 			},
 			{Role: "model", Parts: []*genai.Part{{Text: "I couldn't find that city."}}},
@@ -437,7 +439,7 @@ func TestGeminiToOpenAIConversion(t *testing.T) {
 			{
 				Role: "assistant",
 				ToolCalls: []openaiSDK.ToolCall{{
-					ID:   "call_search_0",
+					ID:   "gemini-fallback-search-0",
 					Type: "function",
 					Function: openaiSDK.FunctionCall{
 						Name:      "search",
@@ -448,7 +450,7 @@ func TestGeminiToOpenAIConversion(t *testing.T) {
 			{
 				Role:       "tool",
 				Content:    `{"results":[{"title":"Python Basics","url":"https://example.com/1"},{"title":"Learn Python","url":"https://example.com/2"}],"total":2}`,
-				ToolCallID: "call_search_0",
+				ToolCallID: "gemini-fallback-search-0",
 				Name:       "search",
 			},
 			{Role: "assistant", Content: "I found 2 Python tutorials for beginners."},

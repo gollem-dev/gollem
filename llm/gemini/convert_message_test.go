@@ -25,6 +25,7 @@ func normalizeGeminiMessages(contents []*genai.Content) []*genai.Content {
 					if err := json.Unmarshal(data, &normalized); err == nil {
 						normalizedParts[j] = &genai.Part{
 							FunctionResponse: &genai.FunctionResponse{
+								ID:       part.FunctionResponse.ID,
 								Name:     part.FunctionResponse.Name,
 								Response: normalized,
 							},
@@ -352,4 +353,104 @@ func TestBackwardCompatibilityWithoutMeta(t *testing.T) {
 		gt.Value(t, part.Thought).Equal(false)
 		gt.Value(t, part.ThoughtSignature).Equal([]byte(nil))
 	}
+}
+
+// TestFunctionCallIDPreservedWithExplicitID verifies that Gemini 3.x style
+// FunctionCall/FunctionResponse IDs are propagated through the gollem.History
+// boundary in both directions. Without this, parallel tool calls under the
+// strict-match contract would lose correlation.
+func TestFunctionCallIDPreservedWithExplicitID(t *testing.T) {
+	const callID = "call_abc123"
+
+	contents := []*genai.Content{
+		{
+			Role:  "user",
+			Parts: []*genai.Part{{Text: "What's the weather?"}},
+		},
+		{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   callID,
+					Name: "get_weather",
+					Args: map[string]any{"location": "Tokyo"},
+				},
+			}},
+		},
+		{
+			Role: "user",
+			Parts: []*genai.Part{{
+				FunctionResponse: &genai.FunctionResponse{
+					ID:       callID,
+					Name:     "get_weather",
+					Response: map[string]any{"temperature": float64(25)},
+				},
+			}},
+		},
+	}
+
+	history, err := gemini.NewHistory(contents)
+	gt.NoError(t, err)
+
+	// gollem.ToolCallContent.ID must mirror FunctionCall.ID.
+	callContent, err := history.Messages[1].Contents[0].GetToolCallContent()
+	gt.NoError(t, err)
+	gt.Value(t, callContent.ID).Equal(callID)
+
+	respContent, err := history.Messages[2].Contents[0].GetToolResponseContent()
+	gt.NoError(t, err)
+	gt.Value(t, respContent.ToolCallID).Equal(callID)
+
+	// Round-trip back into Gemini parts and ensure IDs survive.
+	restored, err := gemini.ToContents(history)
+	gt.NoError(t, err)
+
+	gt.Value(t, restored[1].Parts[0].FunctionCall.ID).Equal(callID)
+	gt.Value(t, restored[2].Parts[0].FunctionResponse.ID).Equal(callID)
+}
+
+// TestFunctionCallIDBackwardCompatNoID verifies that legacy responses without
+// FunctionCall.ID still work: gollem fabricates a stable fallback id internally
+// and strips it on the way out so older Gemini models do not see a synthetic id.
+func TestFunctionCallIDBackwardCompatNoID(t *testing.T) {
+	contents := []*genai.Content{
+		{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					Name: "get_weather",
+					Args: map[string]any{"location": "Tokyo"},
+				},
+			}},
+		},
+		{
+			Role: "user",
+			Parts: []*genai.Part{{
+				FunctionResponse: &genai.FunctionResponse{
+					Name:     "get_weather",
+					Response: map[string]any{"temperature": float64(25)},
+				},
+			}},
+		},
+	}
+
+	history, err := gemini.NewHistory(contents)
+	gt.NoError(t, err)
+
+	// Fallback id is populated for internal correlation.
+	callContent, err := history.Messages[0].Contents[0].GetToolCallContent()
+	gt.NoError(t, err)
+	gt.Value(t, callContent.ID).NotEqual("")
+
+	respContent, err := history.Messages[1].Contents[0].GetToolResponseContent()
+	gt.NoError(t, err)
+	gt.Value(t, respContent.ToolCallID).Equal(callContent.ID)
+
+	// On the way out, the fallback id must be stripped so we do not feed Gemini
+	// an id it never issued.
+	restored, err := gemini.ToContents(history)
+	gt.NoError(t, err)
+
+	gt.Value(t, restored[0].Parts[0].FunctionCall.ID).Equal("")
+	gt.Value(t, restored[1].Parts[0].FunctionResponse.ID).Equal("")
 }

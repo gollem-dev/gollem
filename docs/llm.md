@@ -46,18 +46,41 @@ client, err := gemini.New(ctx, projectID, location,
 )
 ```
 
-Available models:
-- `gemini-2.5-pro` - Most advanced model with state-of-the-art thinking capabilities
-- `gemini-2.5-flash` - Best price-performance model with well-rounded capabilities
+Available models (default: `gemini-3.5-flash`):
+- `gemini-3.5-flash` - Latest Flash model with improved agent execution and coding (uses thinking levels)
+- `gemini-2.5-pro` - Advanced model with state-of-the-art thinking capabilities
+- `gemini-2.5-flash` - Strong price-performance model with well-rounded capabilities
 - `gemini-2.5-flash-lite` - Optimized for cost efficiency and low latency
 - `gemini-2.0-flash` - Superior speed with native tool use and 1M token context
 - `gemini-2.0-flash-thinking-exp-1219` - Experimental model with thinking capabilities
 
 Note: Gemini 1.5 models are deprecated as of April 2025 for new projects.
 
-#### Thinking Budget (Gemini 2.0)
+#### Thinking Level (Gemini 3.x)
 
-Control the model's internal reasoning process:
+Gemini 3.x replaces the numeric `thinking_budget` with a discrete `thinking_level`:
+
+```go
+// Use minimal thinking for fast, simple responses
+client, err := gemini.New(ctx, projectID, location,
+    gemini.WithModel("gemini-3.5-flash"),
+    gemini.WithThinkingLevel(genai.ThinkingLevelMinimal),
+)
+
+// Use higher levels for harder reasoning tasks
+client, err := gemini.New(ctx, projectID, location,
+    gemini.WithModel("gemini-3.5-flash"),
+    gemini.WithThinkingLevel(genai.ThinkingLevelHigh),
+)
+```
+
+Available levels (lowest → highest): `ThinkingLevelMinimal`, `ThinkingLevelLow`, `ThinkingLevelMedium`, `ThinkingLevelHigh`. `gemini.New` defaults to `ThinkingLevelLow`; override it explicitly for tasks that need more reasoning.
+
+Note: Gemini 3.x also deprecates `temperature`, `top_p`, and `top_k` — omit those options when using 3.x models.
+
+#### Thinking Budget (Gemini 2.x)
+
+For Gemini 2.x models, control thinking via a numeric token budget:
 
 ```go
 // Automatic thinking budget (model decides based on complexity)

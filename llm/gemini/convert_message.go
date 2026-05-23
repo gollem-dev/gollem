@@ -2,12 +2,34 @@ package gemini
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/gollem"
 	"github.com/m-mizutani/gollem/internal/convert"
 	"google.golang.org/genai"
 )
+
+// geminiFallbackIDPrefix marks tool-call ids that gollem fabricated because
+// the Gemini API did not supply one. Carrying such ids back to Gemini 3.x —
+// which enforces strict call/response id matching — would feed it ids it
+// never issued, so any id with this prefix is stripped on the way out.
+const geminiFallbackIDPrefix = "gemini-fallback-"
+
+// geminiFallbackToolCallID builds a fallback id used when the Gemini API
+// returned a FunctionCall without an id. The same format must be produced by
+// every code path that synthesizes an id, otherwise the strip logic below
+// will leak fabricated ids back to the API.
+func geminiFallbackToolCallID(name string, index int) string {
+	return geminiFallbackIDPrefix + name + "-" + strconv.Itoa(index)
+}
+
+// isGeminiFallbackToolCallID reports whether id was synthesized by gollem and
+// should be stripped before being sent back to Gemini.
+func isGeminiFallbackToolCallID(id string) bool {
+	return strings.HasPrefix(id, geminiFallbackIDPrefix)
+}
 
 // partMeta is the metadata stored in MessageContent.Meta for Gemini parts.
 // It preserves Gemini-specific fields (e.g., thinking model signatures) across
@@ -101,13 +123,20 @@ func convertGeminiToMessages(contents []*genai.Content) ([]gollem.Message, error
 func convertGeminiContent(content *genai.Content) (gollem.Message, error) {
 	contents := make([]gollem.MessageContent, 0, len(content.Parts))
 
+	// Index used to disambiguate fallback ids for FunctionCall/Response parts
+	// within a single content. Without it, two same-name calls without ids
+	// would collide on the same synthesized id.
+	toolPartIndex := 0
 	for _, part := range content.Parts {
 		if isEmptyPart(part) {
 			continue
 		}
-		msgContent, err := convertGeminiPart(part)
+		msgContent, err := convertGeminiPart(part, toolPartIndex)
 		if err != nil {
 			return gollem.Message{}, goerr.Wrap(err, "failed to convert Gemini part")
+		}
+		if part.FunctionCall != nil || part.FunctionResponse != nil {
+			toolPartIndex++
 		}
 		contents = append(contents, msgContent)
 	}
@@ -121,8 +150,10 @@ func convertGeminiContent(content *genai.Content) (gollem.Message, error) {
 	}, nil
 }
 
-// convertGeminiPart converts a Gemini part to MessageContent
-func convertGeminiPart(part *genai.Part) (gollem.MessageContent, error) {
+// convertGeminiPart converts a Gemini part to MessageContent. fallbackIndex
+// disambiguates synthesized tool-call ids for parts whose FunctionCall.ID is
+// empty.
+func convertGeminiPart(part *genai.Part, fallbackIndex int) (gollem.MessageContent, error) {
 	// Build metadata from thinking-related fields
 	meta, err := marshalPartMeta(partMeta{
 		Thought:          part.Thought,
@@ -178,8 +209,16 @@ func convertGeminiPart(part *genai.Part) (gollem.MessageContent, error) {
 
 	// Function call
 	if part.FunctionCall != nil {
+		// Gemini 3.x returns FunctionCall.ID and requires strict id matching on
+		// the corresponding FunctionResponse. Older Gemini models leave ID
+		// empty, so fall back to a synthesized id that the conversion layer
+		// will strip on the way back to Gemini.
+		id := part.FunctionCall.ID
+		if id == "" {
+			id = geminiFallbackToolCallID(part.FunctionCall.Name, fallbackIndex)
+		}
 		mc, err := gollem.NewToolCallContent(
-			convert.GenerateToolCallID(part.FunctionCall.Name, 0),
+			id,
 			part.FunctionCall.Name,
 			part.FunctionCall.Args,
 		)
@@ -192,8 +231,12 @@ func convertGeminiPart(part *genai.Part) (gollem.MessageContent, error) {
 
 	// Function response
 	if part.FunctionResponse != nil {
+		id := part.FunctionResponse.ID
+		if id == "" {
+			id = geminiFallbackToolCallID(part.FunctionResponse.Name, fallbackIndex)
+		}
 		return gollem.NewToolResponseContent(
-			convert.GenerateToolCallID(part.FunctionResponse.Name, 0),
+			id,
 			part.FunctionResponse.Name,
 			part.FunctionResponse.Response,
 			false,
@@ -357,8 +400,15 @@ func convertContentToGemini(content gollem.MessageContent) (*genai.Part, error) 
 		if err != nil {
 			return nil, err
 		}
+		// Skip ids that gollem fabricated internally; they would not match
+		// anything Gemini 3.x issued, causing strict-match failures.
+		id := toolCall.ID
+		if isGeminiFallbackToolCallID(id) {
+			id = ""
+		}
 		return &genai.Part{
 			FunctionCall: &genai.FunctionCall{
+				ID:   id,
 				Name: toolCall.Name,
 				Args: toolCall.Arguments,
 			},
@@ -370,8 +420,13 @@ func convertContentToGemini(content gollem.MessageContent) (*genai.Part, error) 
 		if err != nil {
 			return nil, err
 		}
+		id := toolResp.ToolCallID
+		if isGeminiFallbackToolCallID(id) {
+			id = ""
+		}
 		return &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{
+				ID:       id,
 				Name:     toolResp.Name,
 				Response: toolResp.Response,
 			},
