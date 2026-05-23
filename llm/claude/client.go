@@ -684,8 +684,10 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 		effectiveCT, hasSchema := effectiveContentType(s.cfg.ContentType(), s.cfg.ResponseSchema(), opts...)
 		processedResp := processResponseWithContentType(ctx, resp, effectiveCT, hasSchema)
 
-		// Set trace data for defer
-		traceData = buildClaudeTraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), apiMessages)
+		// Set trace data for defer.
+		// Record only messages added in this turn; previous turns are already
+		// captured in earlier trace spans.
+		traceData = buildClaudeTraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), messages)
 
 		// Update history with new messages (already in Claude format)
 		s.historyMessages = append(s.historyMessages, messages...)
@@ -893,8 +895,10 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 			return nil, goerr.Wrap(err, "failed to create message stream", opts...)
 		}
 
-		// Set trace data for defer
-		streamTraceData = buildClaudeTraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), allMessages)
+		// Set trace data for defer.
+		// Record only messages added in this turn; previous turns are already
+		// captured in earlier trace spans.
+		streamTraceData = buildClaudeTraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), messages)
 
 		responseChan := make(chan *gollem.ContentResponse)
 

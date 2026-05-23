@@ -1375,3 +1375,82 @@ func TestSessionFunctionResponseIDPropagation(t *testing.T) {
 		gt.Value(t, c.funcResponseID).Equal("")
 	})
 }
+
+// TestGeminiTraceRequestMessagesNewTurnOnly verifies that the trace's
+// LLMRequest.Messages contains only contents newly added in this turn,
+// not the entire conversation history that was actually sent to the API.
+func TestGeminiTraceRequestMessagesNewTurnOnly(t *testing.T) {
+	userContent, err := gollem.NewTextContent("previous question")
+	gt.NoError(t, err)
+	assistantContent, err := gollem.NewTextContent("previous answer")
+	gt.NoError(t, err)
+	history := &gollem.History{
+		Version: gollem.HistoryVersion,
+		LLType:  gollem.LLMTypeGemini,
+		Messages: []gollem.Message{
+			{Role: gollem.RoleUser, Contents: []gollem.MessageContent{userContent}},
+			{Role: gollem.RoleAssistant, Contents: []gollem.MessageContent{assistantContent}},
+		},
+	}
+
+	var sentContents []*genai.Content
+	mockClient := &apiClientMock{
+		GenerateContentFunc: func(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+			sentContents = contents
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{
+					{
+						Content: &genai.Content{
+							Role:  "model",
+							Parts: []*genai.Part{{Text: "ok"}},
+						},
+					},
+				},
+			}, nil
+		},
+		GenerateContentStreamFunc: func(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) <-chan gemini.StreamResponse {
+			ch := make(chan gemini.StreamResponse)
+			close(ch)
+			return ch
+		},
+	}
+
+	cfg := gollem.NewSessionConfig(gollem.WithSessionHistory(history))
+	session, err := gemini.NewSessionWithAPIClient(mockClient, cfg, "gemini-1.5-pro")
+	gt.NoError(t, err)
+
+	rec := trace.New()
+	ctx := rec.StartAgentExecute(context.Background())
+	ctx = trace.WithHandler(ctx, rec)
+
+	_, err = session.Generate(ctx, []gollem.Input{gollem.Text("new question")})
+	gt.NoError(t, err)
+	rec.EndAgentExecute(ctx, nil)
+
+	// Sanity check: the actual API request still includes the full history
+	// (two prior turns + the new user message).
+	gt.N(t, len(sentContents)).Equal(3)
+
+	// Find the LLM call span.
+	var llmSpan *trace.Span
+	for _, child := range rec.Trace().RootSpan.Children {
+		if child.Kind == trace.SpanKindLLMCall {
+			llmSpan = child
+			break
+		}
+	}
+	gt.Value(t, llmSpan).NotNil()
+
+	msgs := llmSpan.LLMCall.Request.Messages
+	gt.A(t, msgs).Length(1)
+	gt.Equal(t, "user", msgs[0].Role)
+	gt.A(t, msgs[0].Contents).Length(1)
+	gt.Equal(t, "text", msgs[0].Contents[0].Type)
+	gt.Equal(t, "new question", msgs[0].Contents[0].Text)
+
+	for _, m := range msgs {
+		for _, c := range m.Contents {
+			gt.S(t, c.Text).NotContains("previous")
+		}
+	}
+}

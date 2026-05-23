@@ -43,7 +43,7 @@ const (
 	MessageContentTypePDF          MessageContentType = "pdf"
 	MessageContentTypeToolCall     MessageContentType = "tool_call"
 	MessageContentTypeToolResponse MessageContentType = "tool_response"
-	MessageContentTypeThinking    MessageContentType = "thinking"
+	MessageContentTypeThinking     MessageContentType = "thinking"
 )
 
 // TextContent represents text content in a message

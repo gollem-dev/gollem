@@ -139,6 +139,10 @@ Each span contains:
 - `Status`: `ok` or `error`
 - Kind-specific data (`LLMCallData`, `ToolExecData`, `EventData`)
 
+#### LLM Call Messages
+
+`LLMCallData.Request.Messages` records only the messages newly added in that turn (e.g. the latest user input and any tool responses), not the full conversation history that was actually sent to the provider. This keeps each span proportional to the work done in that turn — the prior history can be reconstructed by walking the chronologically earlier `llm_call` spans in the same trace.
+
 ### OpenTelemetry Handler (`trace/otel`)
 
 The `trace/otel` package bridges gollem's trace events to OpenTelemetry spans. This integrates with any OTel-compatible backend such as Jaeger, Zipkin, or OTLP collectors.

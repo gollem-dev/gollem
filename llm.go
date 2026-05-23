@@ -26,7 +26,7 @@ type FunctionCall struct {
 // Response is a general response type for each gollem.
 type Response struct {
 	Texts         []string
-	Thoughts     []string
+	Thoughts      []string
 	FunctionCalls []*FunctionCall
 	InputToken    int
 	OutputToken   int

@@ -74,7 +74,7 @@ client, err := gemini.New(ctx, projectID, location,
 )
 ```
 
-Available levels (lowest → highest): `ThinkingLevelMinimal`, `ThinkingLevelLow`, `ThinkingLevelMedium`, `ThinkingLevelHigh`. The default is `medium`.
+Available levels (lowest → highest): `ThinkingLevelMinimal`, `ThinkingLevelLow`, `ThinkingLevelMedium`, `ThinkingLevelHigh`. `gemini.New` defaults to `ThinkingLevelLow`; override it explicitly for tasks that need more reasoning.
 
 Note: Gemini 3.x also deprecates `temperature`, `top_p`, and `top_k` — omit those options when using 3.x models.
 

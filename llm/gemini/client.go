@@ -195,6 +195,10 @@ func WithContentType(contentType gollem.ContentType) Option {
 
 // New creates a new client for the Gemini API.
 // It requires a project ID and location, and can be configured with additional options.
+//
+// The default thinking configuration is ThinkingLevelLow, which works with
+// Gemini 3.x models. Callers using Gemini 2.x models that do not support
+// thinking_level should override this via WithThinkingBudget.
 func New(ctx context.Context, projectID, location string, options ...Option) (*Client, error) {
 	if projectID == "" {
 		return nil, goerr.New("projectID is required")
@@ -202,8 +206,6 @@ func New(ctx context.Context, projectID, location string, options ...Option) (*C
 	if location == "" {
 		return nil, goerr.New("location is required")
 	}
-
-	var budget int32 = 0
 
 	client := &Client{
 		projectID:      projectID,
@@ -213,7 +215,7 @@ func New(ctx context.Context, projectID, location string, options ...Option) (*C
 		contentType:    gollem.ContentTypeText,
 		generationConfig: &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: &budget,
+				ThinkingLevel: genai.ThinkingLevelLow,
 			},
 		},
 	}
@@ -521,13 +523,17 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 			return nil, err
 		}
 
-		// Add current input as a new user message
+		// Add current input as a new user message.
+		// newTurnContents tracks only the contents added in this turn so that
+		// trace data records the delta rather than the full history.
+		var newTurnContents []*genai.Content
 		if len(parts) > 0 {
 			userContent := &genai.Content{
 				Role:  "user",
 				Parts: parts,
 			}
 			contents = append(contents, userContent)
+			newTurnContents = append(newTurnContents, userContent)
 		}
 
 		// Start LLM call trace span
@@ -558,8 +564,10 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 			return nil, err
 		}
 
-		// Set trace data for defer
-		geminiTraceData = buildGeminiTraceData(response, s.model, s.cfg.SystemPrompt(), contents)
+		// Set trace data for defer.
+		// Record only contents added in this turn; previous turns are already
+		// captured in earlier trace spans.
+		geminiTraceData = buildGeminiTraceData(response, s.model, s.cfg.SystemPrompt(), newTurnContents)
 
 		// Update history with the input and raw response content.
 		// Use candidate.Content directly to preserve all fields (e.g., ThoughtSignature).
@@ -655,13 +663,17 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 			return nil, err
 		}
 
-		// Add current input as a new user message
+		// Add current input as a new user message.
+		// newTurnContents tracks only the contents added in this turn so that
+		// trace data records the delta rather than the full history.
+		var newTurnContents []*genai.Content
 		if len(parts) > 0 {
 			userContent := &genai.Content{
 				Role:  "user",
 				Parts: parts,
 			}
 			contents = append(contents, userContent)
+			newTurnContents = append(newTurnContents, userContent)
 		}
 
 		// Start LLM call trace span
@@ -777,14 +789,16 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 				}
 			}
 
-			// Set trace data for defer
+			// Set trace data for defer.
+			// Record only contents added in this turn; previous turns are
+			// already captured in earlier trace spans.
 			streamTraceData = &trace.LLMCallData{
 				InputTokens:  totalInputTokens,
 				OutputTokens: totalOutputTokens,
 				Model:        s.model,
 				Request: &trace.LLMRequest{
 					SystemPrompt: s.cfg.SystemPrompt(),
-					Messages:     contentsToTraceMessages(contents),
+					Messages:     contentsToTraceMessages(newTurnContents),
 				},
 				Response: &trace.LLMResponse{},
 			}

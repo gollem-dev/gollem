@@ -1,0 +1,16 @@
+name: integrity
+
+on:
+  push:
+
+jobs:
+  invisible-chars:
+    name: invisible unicode chars
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Check for invisible / ambiguous Unicode characters
+        run: ./.github/scripts/check-invisible-chars.sh

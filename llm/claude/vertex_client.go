@@ -235,8 +235,10 @@ func (s *VertexAnthropicSession) Generate(ctx context.Context, input []gollem.In
 		return nil, err
 	}
 
-	// Set trace data for defer
-	traceData = buildClaudeTraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), apiMessages)
+	// Set trace data for defer.
+	// Record only messages added in this turn; previous turns are already
+	// captured in earlier trace spans.
+	traceData = buildClaudeTraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), messages)
 
 	// Only update session history after successful API call
 	s.messages = append(s.messages, messages...)
@@ -368,6 +370,9 @@ func (s *VertexAnthropicSession) Stream(ctx context.Context, input []gollem.Inpu
 			Model:        s.defaultModel,
 			Request: &trace.LLMRequest{
 				SystemPrompt: s.cfg.SystemPrompt(),
+				// Record only messages added in this turn; previous turns are
+				// already captured in earlier trace spans.
+				Messages: claudeMessagesToTraceMessages(messages),
 			},
 			Response: &trace.LLMResponse{
 				Texts:         allTexts,

@@ -436,3 +436,92 @@ func TestThinkingContentExtraction(t *testing.T) {
 		gt.Equal(t, 15, result.OutputToken)
 	})
 }
+
+// TestOpenAITraceRequestMessagesNewTurnOnly verifies that the trace's
+// LLMRequest.Messages contains only messages newly added in this turn,
+// not the entire conversation history that was actually sent to the API.
+func TestOpenAITraceRequestMessagesNewTurnOnly(t *testing.T) {
+	makeHistory := func() *gollem.History {
+		userContent, err := gollem.NewTextContent("previous question")
+		gt.NoError(t, err)
+		assistantContent, err := gollem.NewTextContent("previous answer")
+		gt.NoError(t, err)
+		return &gollem.History{
+			Version: gollem.HistoryVersion,
+			LLType:  gollem.LLMTypeOpenAI,
+			Messages: []gollem.Message{
+				{Role: gollem.RoleUser, Contents: []gollem.MessageContent{userContent}},
+				{Role: gollem.RoleAssistant, Contents: []gollem.MessageContent{assistantContent}},
+			},
+		}
+	}
+
+	findLLMSpan := func(t *testing.T, root *trace.Span) *trace.Span {
+		t.Helper()
+		for _, child := range root.Children {
+			if child.Kind == trace.SpanKindLLMCall {
+				return child
+			}
+		}
+		t.Fatal("llm_call span not found")
+		return nil
+	}
+
+	t.Run("Generate", func(t *testing.T) {
+		var sentMessages []openaiapi.ChatCompletionMessage
+		mockClient := &apiClientMock{
+			CreateChatCompletionFunc: func(ctx context.Context, req openaiapi.ChatCompletionRequest) (openaiapi.ChatCompletionResponse, error) {
+				sentMessages = req.Messages
+				return openaiapi.ChatCompletionResponse{
+					Model: "gpt-5",
+					Choices: []openaiapi.ChatCompletionChoice{
+						{
+							Message: openaiapi.ChatCompletionMessage{
+								Role:    openaiapi.ChatMessageRoleAssistant,
+								Content: "ok",
+							},
+							FinishReason: openaiapi.FinishReasonStop,
+						},
+					},
+				}, nil
+			},
+		}
+
+		cfg := gollem.NewSessionConfig(gollem.WithSessionHistory(makeHistory()))
+		session, err := openai.NewSessionWithAPIClient(mockClient, cfg, "gpt-5")
+		gt.NoError(t, err)
+
+		rec := trace.New()
+		ctx := rec.StartAgentExecute(context.Background())
+		ctx = trace.WithHandler(ctx, rec)
+
+		_, err = session.Generate(ctx, []gollem.Input{gollem.Text("new question")})
+		gt.NoError(t, err)
+		rec.EndAgentExecute(ctx, nil)
+
+		// Sanity check: the actual API request includes the full history.
+		gt.N(t, len(sentMessages)).Equal(3)
+
+		// But the trace records only the new turn.
+		llmSpan := findLLMSpan(t, rec.Trace().RootSpan)
+		msgs := llmSpan.LLMCall.Request.Messages
+		gt.A(t, msgs).Length(1)
+		gt.Equal(t, "user", msgs[0].Role)
+		gt.A(t, msgs[0].Contents).Length(1)
+		gt.Equal(t, "text", msgs[0].Contents[0].Type)
+		gt.Equal(t, "new question", msgs[0].Contents[0].Text)
+
+		for _, m := range msgs {
+			for _, c := range m.Contents {
+				gt.S(t, c.Text).NotContains("previous")
+			}
+		}
+	})
+
+	// Note: Stream is not covered by a mock-based test because
+	// *openai.ChatCompletionStream cannot be constructed outside the SDK
+	// (it has unexported fields). The Stream code path uses the same
+	// newMessages variable and the same openaiMessagesToTraceMessages call
+	// site as Generate, so the Generate test above is structurally
+	// equivalent for the trace-delta invariant.
+}

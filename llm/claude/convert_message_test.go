@@ -156,7 +156,7 @@ func TestClaudeMessageRoundTrip(t *testing.T) {
 		reasoning, err := content.GetThinkingContent()
 		gt.NoError(t, err)
 		gt.Equal(t, "", reasoning.Text)
-			// Signature is stored in meta
-			gt.NotNil(t, content.Meta)
+		// Signature is stored in meta
+		gt.NotNil(t, content.Meta)
 	})
 }

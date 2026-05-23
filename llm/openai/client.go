@@ -310,7 +310,6 @@ func (s *Session) updateHistoryWithResponse(assistantMessage openai.ChatCompleti
 	return nil
 }
 
-// convertInputs converts gollem.Input to OpenAI messages and updates currentHistory
 // convertInputsToMessages converts gollem.Input to OpenAI messages without modifying session state.
 // This is a pure function used for read-only operations like CountToken.
 func (s *Session) convertInputsToMessages(input ...gollem.Input) ([]openai.ChatCompletionMessage, error) {
@@ -386,27 +385,22 @@ func (s *Session) convertInputsToMessages(input ...gollem.Input) ([]openai.ChatC
 	return newMessages, nil
 }
 
-func (s *Session) convertInputs(input ...gollem.Input) error {
+// convertInputs converts gollem.Input to OpenAI messages, appends them to the
+// session history, and returns the newly added messages so callers (e.g. trace)
+// can record only the messages added in this turn.
+func (s *Session) convertInputs(input ...gollem.Input) ([]openai.ChatCompletionMessage, error) {
 	// Convert inputs to messages using the pure function
 	newMessages, err := s.convertInputsToMessages(input...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Update currentHistory with new messages
 	if len(newMessages) > 0 {
-		// Get current messages and append new ones
-		currentMessages, err := s.getMessages()
-		if err != nil {
-			return goerr.Wrap(err, "failed to get current messages")
-		}
-		allMessages := append(currentMessages, newMessages...)
-
-		// Update history with all messages
-		s.historyMessages = allMessages
+		s.historyMessages = append(s.historyMessages, newMessages...)
 	}
 
-	return nil
+	return newMessages, nil
 }
 
 // createRequest creates a chat completion request with the current session state
@@ -491,7 +485,8 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 		}
 
 		// Convert inputs and perform the actual API call
-		if err := s.convertInputs(req.Inputs...); err != nil {
+		newMessages, err := s.convertInputs(req.Inputs...)
+		if err != nil {
 			return nil, err
 		}
 
@@ -534,7 +529,7 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 
 		response := &gollem.Response{
 			Texts:         make([]string, 0),
-			Thoughts:     make([]string, 0),
+			Thoughts:      make([]string, 0),
 			FunctionCalls: make([]*gollem.FunctionCall, 0),
 			InputToken:    resp.Usage.PromptTokens,
 			OutputToken:   resp.Usage.CompletionTokens,
@@ -587,14 +582,16 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 			}
 		}
 
-		// Set trace data for defer
-		openaiTraceData = buildOpenAITraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), openaiReq.Messages)
+		// Set trace data for defer.
+		// Record only messages added in this turn; the full request history is
+		// captured incrementally across previous trace spans.
+		openaiTraceData = buildOpenAITraceData(resp, s.defaultModel, s.cfg.SystemPrompt(), newMessages)
 
 		// History is already updated by updateHistoryWithResponse above
 
 		return &gollem.ContentResponse{
 			Texts:         response.Texts,
-			Thoughts:     response.Thoughts,
+			Thoughts:      response.Thoughts,
 			FunctionCalls: response.FunctionCalls,
 			InputToken:    response.InputToken,
 			OutputToken:   response.OutputToken,
@@ -617,7 +614,7 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 	// Convert ContentResponse back to gollem.Response
 	return &gollem.Response{
 		Texts:         contentResp.Texts,
-		Thoughts:     contentResp.Thoughts,
+		Thoughts:      contentResp.Thoughts,
 		FunctionCalls: contentResp.FunctionCalls,
 		InputToken:    contentResp.InputToken,
 		OutputToken:   contentResp.OutputToken,
@@ -655,7 +652,8 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 		}
 
 		// Convert inputs and perform the actual API call
-		if err := s.convertInputs(req.Inputs...); err != nil {
+		newMessages, err := s.convertInputs(req.Inputs...)
+		if err != nil {
 			return nil, err
 		}
 
@@ -755,7 +753,7 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 				if delta.ReasoningContent != "" {
 					reasoningContent += delta.ReasoningContent
 					responseChan <- &gollem.ContentResponse{
-						Thoughts:   []string{delta.ReasoningContent},
+						Thoughts:    []string{delta.ReasoningContent},
 						InputToken:  totalInputTokens,
 						OutputToken: totalOutputTokens,
 					}
@@ -860,14 +858,16 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 				}
 			}
 
-			// Set trace data for defer
+			// Set trace data for defer.
+			// Record only messages added in this turn; previous turns are already
+			// captured in earlier trace spans.
 			streamTraceData = &trace.LLMCallData{
 				InputTokens:  totalInputTokens,
 				OutputTokens: totalOutputTokens,
 				Model:        s.defaultModel,
 				Request: &trace.LLMRequest{
 					SystemPrompt: s.cfg.SystemPrompt(),
-					Messages:     openaiMessagesToTraceMessages(openaiReq.Messages),
+					Messages:     openaiMessagesToTraceMessages(newMessages),
 				},
 				Response: &trace.LLMResponse{},
 			}
@@ -931,7 +931,7 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 			} else {
 				responseChan <- &gollem.Response{
 					Texts:         streamResp.Texts,
-					Thoughts:     streamResp.Thoughts,
+					Thoughts:      streamResp.Thoughts,
 					FunctionCalls: streamResp.FunctionCalls,
 					InputToken:    streamResp.InputToken,
 					OutputToken:   streamResp.OutputToken,
