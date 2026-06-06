@@ -1,0 +1,4 @@
+overrides:
+  rollup: '>=4.59.0'
+allowBuilds:
+  esbuild: true
