@@ -7099,7 +7099,7 @@ var clientExports = requireClient();
 const ReactDOM = /* @__PURE__ */ getDefaultExportFromCjs(clientExports);
 requireReactDom();
 /**
- * @remix-run/router v1.23.2
+ * @remix-run/router v1.23.3
  *
  * Copyright (c) Remix Software Inc.
  *
@@ -7109,18 +7109,13 @@ requireReactDom();
  * @license MIT
  */
 function _extends$2() {
-  _extends$2 = Object.assign ? Object.assign.bind() : function(target) {
-    for (var i = 1; i < arguments.length; i++) {
-      var source = arguments[i];
-      for (var key in source) {
-        if (Object.prototype.hasOwnProperty.call(source, key)) {
-          target[key] = source[key];
-        }
-      }
+  return _extends$2 = Object.assign ? Object.assign.bind() : function(n) {
+    for (var e = 1; e < arguments.length; e++) {
+      var t = arguments[e];
+      for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]);
     }
-    return target;
-  };
-  return _extends$2.apply(this, arguments);
+    return n;
+  }, _extends$2.apply(null, arguments);
 }
 var Action;
 (function(Action2) {
@@ -7368,8 +7363,8 @@ function matchRoutesImpl(routes, locationArg, basename2, allowPartial) {
   let branches = flattenRoutes(routes);
   rankRouteBranches(branches);
   let matches = null;
+  let decoded = decodePath(pathname);
   for (let i = 0; matches == null && i < branches.length; ++i) {
-    let decoded = decodePath(pathname);
     matches = matchRouteBranch(branches[i], decoded);
   }
   return matches;
@@ -7618,7 +7613,7 @@ function resolvePath(to, fromPathname) {
     } else {
       if (toPathname.includes("//")) {
         let oldPathname = toPathname;
-        toPathname = toPathname.replace(/\/\/+/g, "/");
+        toPathname = removeDoubleSlashes(toPathname);
         warning(false, "Pathnames cannot have embedded double slashes - normalizing " + (oldPathname + " -> " + toPathname));
       }
       if (toPathname.startsWith("/")) {
@@ -7699,7 +7694,8 @@ function resolveTo(toArg, routePathnames, locationPathname, isPathRelative) {
   }
   return path;
 }
-const joinPaths = (paths) => paths.join("/").replace(/\/\/+/g, "/");
+const removeDoubleSlashes = (path) => path.replace(/\/\/+/g, "/");
+const joinPaths = (paths) => removeDoubleSlashes(paths.join("/"));
 const normalizePathname = (pathname) => pathname.replace(/\/+$/, "").replace(/^\/*/, "/");
 const normalizeSearch = (search2) => !search2 || search2 === "?" ? "" : search2.startsWith("?") ? search2 : "?" + search2;
 const normalizeHash = (hash) => !hash || hash === "#" ? "" : hash.startsWith("#") ? hash : "#" + hash;
@@ -7711,7 +7707,7 @@ new Set(validMutationMethodsArr);
 const validRequestMethodsArr = ["get", ...validMutationMethodsArr];
 new Set(validRequestMethodsArr);
 /**
- * React Router v6.30.3
+ * React Router v6.30.4
  *
  * Copyright (c) Remix Software Inc.
  *
@@ -7721,18 +7717,13 @@ new Set(validRequestMethodsArr);
  * @license MIT
  */
 function _extends$1() {
-  _extends$1 = Object.assign ? Object.assign.bind() : function(target) {
-    for (var i = 1; i < arguments.length; i++) {
-      var source = arguments[i];
-      for (var key in source) {
-        if (Object.prototype.hasOwnProperty.call(source, key)) {
-          target[key] = source[key];
-        }
-      }
+  return _extends$1 = Object.assign ? Object.assign.bind() : function(n) {
+    for (var e = 1; e < arguments.length; e++) {
+      var t = arguments[e];
+      for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]);
     }
-    return target;
-  };
-  return _extends$1.apply(this, arguments);
+    return n;
+  }, _extends$1.apply(null, arguments);
 }
 const DataRouterContext = /* @__PURE__ */ reactExports.createContext(null);
 const DataRouterStateContext = /* @__PURE__ */ reactExports.createContext(null);
@@ -8292,7 +8283,7 @@ function createRoutesFromChildren(children2, parentPath) {
   return routes;
 }
 /**
- * React Router DOM v6.30.3
+ * React Router DOM v6.30.4
  *
  * Copyright (c) Remix Software Inc.
  *
@@ -8302,30 +8293,22 @@ function createRoutesFromChildren(children2, parentPath) {
  * @license MIT
  */
 function _extends() {
-  _extends = Object.assign ? Object.assign.bind() : function(target) {
-    for (var i = 1; i < arguments.length; i++) {
-      var source = arguments[i];
-      for (var key in source) {
-        if (Object.prototype.hasOwnProperty.call(source, key)) {
-          target[key] = source[key];
-        }
-      }
+  return _extends = Object.assign ? Object.assign.bind() : function(n) {
+    for (var e = 1; e < arguments.length; e++) {
+      var t = arguments[e];
+      for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]);
     }
-    return target;
-  };
-  return _extends.apply(this, arguments);
+    return n;
+  }, _extends.apply(null, arguments);
 }
-function _objectWithoutPropertiesLoose(source, excluded) {
-  if (source == null) return {};
-  var target = {};
-  var sourceKeys = Object.keys(source);
-  var key, i;
-  for (i = 0; i < sourceKeys.length; i++) {
-    key = sourceKeys[i];
-    if (excluded.indexOf(key) >= 0) continue;
-    target[key] = source[key];
+function _objectWithoutPropertiesLoose(r, e) {
+  if (null == r) return {};
+  var t = {};
+  for (var n in r) if ({}.hasOwnProperty.call(r, n)) {
+    if (-1 !== e.indexOf(n)) continue;
+    t[n] = r[n];
   }
-  return target;
+  return t;
 }
 function isModifiedEvent(event) {
   return !!(event.metaKey || event.altKey || event.ctrlKey || event.shiftKey);

@@ -36,7 +36,7 @@ SOFTWARE.
 ========================================================================
 
 Package: @remix-run/router
-Version: 1.23.2
+Version: 1.23.3
 License: MIT
 Author:  Remix Software
 URL:     https://github.com/remix-run/react-router#readme
@@ -3122,7 +3122,7 @@ SOFTWARE.
 ========================================================================
 
 Package: react-router
-Version: 6.30.3
+Version: 6.30.4
 License: MIT
 Author:  Remix Software
 URL:     https://github.com/remix-run/react-router#readme
@@ -3154,7 +3154,7 @@ SOFTWARE.
 ========================================================================
 
 Package: react-router-dom
-Version: 6.30.3
+Version: 6.30.4
 License: MIT
 Author:  Remix Software
 URL:     https://github.com/remix-run/react-router#readme
