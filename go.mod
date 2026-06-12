@@ -1,4 +1,4 @@
-module github.com/m-mizutani/gollem
+module github.com/gollem-dev/gollem
 
 go 1.26.0
 

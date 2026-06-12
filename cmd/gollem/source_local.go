@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem/trace"
 )
 
 type localSource struct {

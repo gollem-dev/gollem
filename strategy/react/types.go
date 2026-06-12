@@ -3,7 +3,7 @@ package react
 import (
 	"time"
 
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 )
 
 // TAOEntry represents a single Thought-Action-Observation cycle entry

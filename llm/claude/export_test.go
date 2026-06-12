@@ -2,7 +2,7 @@ package claude
 
 import (
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 )
 
 // Export convert functions for testing

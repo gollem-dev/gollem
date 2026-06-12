@@ -6,9 +6,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/llm/gemini"
-	"github.com/m-mizutani/gollem/strategy/reflexion"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/llm/gemini"
+	"github.com/gollem-dev/gollem/strategy/reflexion"
 )
 
 func main() {

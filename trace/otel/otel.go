@@ -19,13 +19,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/m-mizutani/gollem/trace"
+	"github.com/gollem-dev/gollem/trace"
 	otelAPI "go.opentelemetry.io/otel"
 	otelTrace "go.opentelemetry.io/otel/trace"
 )
 
 const (
-	tracerName = "github.com/m-mizutani/gollem"
+	tracerName = "github.com/gollem-dev/gollem"
 )
 
 // Option is a functional option for configuring the OTel handler.

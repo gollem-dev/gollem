@@ -280,7 +280,7 @@ agent := gollem.New(client,
 The compacter middleware automatically handles token limit errors by compressing conversation history using LLM summarization. When a token limit error is detected, it summarizes the oldest messages (default 70%) and retries the request.
 
 ```go
-import "github.com/m-mizutani/gollem/middleware/compacter"
+import "github.com/gollem-dev/gollem/middleware/compacter"
 
 agent := gollem.New(client,
 	gollem.WithContentBlockMiddleware(

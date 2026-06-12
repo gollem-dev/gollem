@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 )
 
 // buildTrajectory constructs a Trajectory from the current execution state.

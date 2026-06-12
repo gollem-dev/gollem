@@ -1,7 +1,7 @@
 package gemini
 
 import (
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 	"google.golang.org/genai"
 )
 

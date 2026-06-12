@@ -2,8 +2,8 @@ package claude
 
 import (
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/m-mizutani/gollem"
-	gollemschema "github.com/m-mizutani/gollem/internal/schema"
+	"github.com/gollem-dev/gollem"
+	gollemschema "github.com/gollem-dev/gollem/internal/schema"
 )
 
 func convertTool(tool gollem.Tool) anthropic.ToolUnionParam {

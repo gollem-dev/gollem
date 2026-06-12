@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/internal/convert"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/internal/convert"
 	"google.golang.org/genai"
 )
 

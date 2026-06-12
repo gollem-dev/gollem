@@ -5,7 +5,7 @@ package mock
 
 import (
 	"context"
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 	"sync"
 )
 

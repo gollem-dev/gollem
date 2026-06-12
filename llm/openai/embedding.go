@@ -3,8 +3,8 @@ package openai
 import (
 	"context"
 
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem/trace"
 	"github.com/sashabaranov/go-openai"
 )
 

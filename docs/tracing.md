@@ -148,7 +148,7 @@ Each span contains:
 The `trace/otel` package bridges gollem's trace events to OpenTelemetry spans. This integrates with any OTel-compatible backend such as Jaeger, Zipkin, or OTLP collectors.
 
 ```go
-import traceOtel "github.com/m-mizutani/gollem/trace/otel"
+import traceOtel "github.com/gollem-dev/gollem/trace/otel"
 
 // Uses the global TracerProvider (set by your OTel SDK setup)
 agent := gollem.New(client, gollem.WithTrace(traceOtel.New()))
@@ -160,7 +160,7 @@ If you manage multiple `TracerProvider` instances or want to avoid the global:
 
 ```go
 import (
-    traceOtel "github.com/m-mizutani/gollem/trace/otel"
+    traceOtel "github.com/gollem-dev/gollem/trace/otel"
     sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -194,8 +194,8 @@ Errors are recorded via `span.RecordError()`. Parent-child relationships are pre
 
 ```go
 import (
-    "github.com/m-mizutani/gollem/trace"
-    traceOtel "github.com/m-mizutani/gollem/trace/otel"
+    "github.com/gollem-dev/gollem/trace"
+    traceOtel "github.com/gollem-dev/gollem/trace/otel"
 )
 
 // Record in-memory AND export to OTel
@@ -304,7 +304,7 @@ gollem includes a built-in web-based trace viewer for visually inspecting trace 
 ### Installation
 
 ```bash
-go install github.com/m-mizutani/gollem/cmd/gollem@latest
+go install github.com/gollem-dev/gollem/cmd/gollem@latest
 ```
 
 No Node.js is required — the frontend is pre-built and embedded in the Go binary via `go:embed`.

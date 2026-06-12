@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/mock"
-	"github.com/m-mizutani/gollem/trace"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/mock"
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/m-mizutani/gt"
 )
 

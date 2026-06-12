@@ -1,8 +1,8 @@
 package openai
 
 import (
-	"github.com/m-mizutani/gollem"
-	gollemschema "github.com/m-mizutani/gollem/internal/schema"
+	"github.com/gollem-dev/gollem"
+	gollemschema "github.com/gollem-dev/gollem/internal/schema"
 	"github.com/sashabaranov/go-openai"
 )
 

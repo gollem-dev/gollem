@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gollem-dev/gollem/cmd/gollem/frontend"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem/cmd/gollem/frontend"
 )
 
 type serverOption func(*server)

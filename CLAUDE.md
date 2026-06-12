@@ -183,7 +183,7 @@ gollem provides detailed logging via the `trace/logger` package, which implement
 #### Setup
 
 ```go
-import tracelogger "github.com/m-mizutani/gollem/trace/logger"
+import tracelogger "github.com/gollem-dev/gollem/trace/logger"
 
 // Enable all events (default)
 handler := tracelogger.New()

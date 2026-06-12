@@ -5,7 +5,7 @@ package gemini_test
 
 import (
 	"context"
-	"github.com/m-mizutani/gollem/llm/gemini"
+	"github.com/gollem-dev/gollem/llm/gemini"
 	genai "google.golang.org/genai"
 	"sync"
 )

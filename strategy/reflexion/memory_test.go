@@ -3,7 +3,7 @@ package reflexion_test
 import (
 	"testing"
 
-	"github.com/m-mizutani/gollem/strategy/reflexion"
+	"github.com/gollem-dev/gollem/strategy/reflexion"
 	"github.com/m-mizutani/gt"
 )
 

@@ -28,9 +28,9 @@ A bounded FIFO buffer storing reflections from past trials (default: 3 most rece
 
 ```go
 import (
-    "github.com/m-mizutani/gollem"
-    "github.com/m-mizutani/gollem/llm/openai"
-    "github.com/m-mizutani/gollem/strategy/reflexion"
+    "github.com/gollem-dev/gollem"
+    "github.com/gollem-dev/gollem/llm/openai"
+    "github.com/gollem-dev/gollem/strategy/reflexion"
 )
 
 // Create LLM client

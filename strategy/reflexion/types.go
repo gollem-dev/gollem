@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 )
 
 // Trajectory captures the execution trace of a trial.

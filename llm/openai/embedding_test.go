@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/m-mizutani/gollem/llm/openai"
+	"github.com/gollem-dev/gollem/llm/openai"
 	"github.com/m-mizutani/gt"
 )
 

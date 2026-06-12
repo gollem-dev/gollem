@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/m-mizutani/gollem/trace"
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/m-mizutani/gt"
 )
 

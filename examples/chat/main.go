@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/llm/gemini"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/llm/gemini"
 )
 
 // WeatherTool is a simple tool that returns weather information

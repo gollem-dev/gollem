@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/m-mizutani/gollem/trace"
-	traceOtel "github.com/m-mizutani/gollem/trace/otel"
+	"github.com/gollem-dev/gollem/trace"
+	traceOtel "github.com/gollem-dev/gollem/trace/otel"
 	"github.com/m-mizutani/gt"
 	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/internal/schema"
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/internal/schema"
-	"github.com/m-mizutani/gollem/trace"
 	"github.com/pkoukk/tiktoken-go"
 	"github.com/sashabaranov/go-openai"
 )

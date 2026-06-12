@@ -1,4 +1,4 @@
-# 🤖 gollem [![Go Reference](https://pkg.go.dev/badge/github.com/m-mizutani/gollem.svg)](https://pkg.go.dev/github.com/m-mizutani/gollem) [![Test](https://github.com/m-mizutani/gollem/actions/workflows/test.yml/badge.svg)](https://github.com/m-mizutani/gollem/actions/workflows/test.yml) [![Lint](https://github.com/m-mizutani/gollem/actions/workflows/lint.yml/badge.svg)](https://github.com/m-mizutani/gollem/actions/workflows/lint.yml) [![Gosec](https://github.com/m-mizutani/gollem/actions/workflows/gosec.yml/badge.svg)](https://github.com/m-mizutani/gollem/actions/workflows/gosec.yml) [![Trivy](https://github.com/m-mizutani/gollem/actions/workflows/trivy.yml/badge.svg)](https://github.com/m-mizutani/gollem/actions/workflows/trivy.yml)
+# 🤖 gollem [![Go Reference](https://pkg.go.dev/badge/github.com/gollem-dev/gollem.svg)](https://pkg.go.dev/github.com/gollem-dev/gollem) [![Test](https://github.com/gollem-dev/gollem/actions/workflows/test.yml/badge.svg)](https://github.com/gollem-dev/gollem/actions/workflows/test.yml) [![Lint](https://github.com/gollem-dev/gollem/actions/workflows/lint.yml/badge.svg)](https://github.com/gollem-dev/gollem/actions/workflows/lint.yml) [![Gosec](https://github.com/gollem-dev/gollem/actions/workflows/gosec.yml/badge.svg)](https://github.com/gollem-dev/gollem/actions/workflows/gosec.yml) [![Trivy](https://github.com/gollem-dev/gollem/actions/workflows/trivy.yml/badge.svg)](https://github.com/gollem-dev/gollem/actions/workflows/trivy.yml)
 
 GO for Large LanguagE Model (GOLLEM)
 
@@ -28,7 +28,7 @@ GO for Large LanguagE Model (GOLLEM)
 ## Install
 
 ```bash
-go get github.com/m-mizutani/gollem
+go get github.com/gollem-dev/gollem
 ```
 
 ## Quick Start
@@ -41,8 +41,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/llm/openai"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/llm/openai"
 )
 
 func main() {
@@ -186,7 +186,7 @@ agent := gollem.New(client,
 Swap execution strategies: simple, ReAct, or Plan & Execute. [Learn more →](docs/strategy.md)
 
 ```go
-import "github.com/m-mizutani/gollem/strategy/planexec"
+import "github.com/gollem-dev/gollem/strategy/planexec"
 
 agent := gollem.New(client,
 	gollem.WithStrategy(planexec.New(client)),
@@ -199,7 +199,7 @@ agent := gollem.New(client,
 Observe agent execution with pluggable backends (in-memory, OpenTelemetry). [Learn more →](docs/tracing.md)
 
 ```go
-import "github.com/m-mizutani/gollem/trace"
+import "github.com/gollem-dev/gollem/trace"
 
 rec := trace.New(trace.WithRepository(trace.NewFileRepository("./traces")))
 agent := gollem.New(client, gollem.WithTrace(rec))
@@ -237,7 +237,7 @@ err := agent.Execute(ctx, gollem.Text("Hello!"))
 
 ## Examples
 
-See the [examples](https://github.com/m-mizutani/gollem/tree/main/examples) directory for complete working examples:
+See the [examples](https://github.com/gollem-dev/gollem/tree/main/examples) directory for complete working examples:
 
 - **[Simple](examples/simple)**: Minimal example for getting started
 - **[Query](examples/query)**: Type-safe structured query with `Query[T]()`
@@ -261,7 +261,7 @@ See the [examples](https://github.com/m-mizutani/gollem/tree/main/examples) dire
 - **[History Management](docs/history.md)**
 - **[LLM Provider Configuration](docs/llm.md)**
 - **[Debugging](docs/debugging.md)**
-- **[API Reference](https://pkg.go.dev/github.com/m-mizutani/gollem)**
+- **[API Reference](https://pkg.go.dev/github.com/gollem-dev/gollem)**
 
 ## License
 
