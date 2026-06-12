@@ -19,7 +19,7 @@ agent := gollem.New(client,
 ReAct (Reasoning + Acting) pattern with step-by-step reasoning:
 
 ```go
-import "github.com/m-mizutani/gollem/strategy/react"
+import "github.com/gollem-dev/gollem/strategy/react"
 
 strategy := react.New(client)
 agent := gollem.New(client,
@@ -33,7 +33,7 @@ agent := gollem.New(client,
 Goal-oriented task planning and execution with context-aware planning:
 
 ```go
-import "github.com/m-mizutani/gollem/strategy/planexec"
+import "github.com/gollem-dev/gollem/strategy/planexec"
 
 strategy := planexec.New(client)
 agent := gollem.New(client,
@@ -54,7 +54,7 @@ The Plan & Execute strategy uses a three-phase approach with context embedding:
 You can generate and reuse plans separately from execution:
 
 ```go
-import "github.com/m-mizutani/gollem/strategy/planexec"
+import "github.com/gollem-dev/gollem/strategy/planexec"
 
 // Generate a plan separately
 plan, err := planexec.GeneratePlan(ctx, client,

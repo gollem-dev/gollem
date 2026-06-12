@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem"
 )
 
 // getNextPendingTask returns the next task that needs to be executed

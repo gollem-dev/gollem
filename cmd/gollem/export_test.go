@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/m-mizutani/gollem/trace"
+	"github.com/gollem-dev/gollem/trace"
 )
 
 // ListEntriesResponse is exported for testing.

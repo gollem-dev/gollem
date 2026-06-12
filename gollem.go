@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/google/uuid"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem/trace"
 )
 
 // ResponseMode is the type for the response mode of the gollem agent.

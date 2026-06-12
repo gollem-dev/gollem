@@ -14,8 +14,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/llm/openai"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/llm/openai"
 )
 
 // FileRepository is a sample HistoryRepository that stores History as JSON files.

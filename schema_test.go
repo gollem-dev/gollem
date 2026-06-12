@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/llm/claude"
-	"github.com/m-mizutani/gollem/llm/gemini"
-	"github.com/m-mizutani/gollem/llm/openai"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/llm/claude"
+	"github.com/gollem-dev/gollem/llm/gemini"
+	"github.com/gollem-dev/gollem/llm/openai"
 	"github.com/m-mizutani/gt"
 )
 

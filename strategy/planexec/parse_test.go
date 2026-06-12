@@ -3,8 +3,8 @@ package planexec_test
 import (
 	"testing"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/strategy/planexec"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/strategy/planexec"
 	"github.com/m-mizutani/gt"
 )
 

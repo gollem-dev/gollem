@@ -7,7 +7,7 @@ gollem is a Go framework for building applications with Large Language Models (L
 Install gollem using Go modules:
 
 ```bash
-go get github.com/m-mizutani/gollem
+go get github.com/gollem-dev/gollem
 ```
 
 ## Basic Usage
@@ -22,9 +22,9 @@ import (
     "fmt"
     "os"
 
-    "github.com/m-mizutani/gollem"
-    "github.com/m-mizutani/gollem/llm/openai"
-    "github.com/m-mizutani/gollem/mcp"
+    "github.com/gollem-dev/gollem"
+    "github.com/gollem-dev/gollem/llm/openai"
+    "github.com/gollem-dev/gollem/mcp"
 )
 
 func main() {

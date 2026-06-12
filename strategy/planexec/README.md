@@ -36,9 +36,9 @@ import (
     "fmt"
     "os"
 
-    "github.com/m-mizutani/gollem"
-    "github.com/m-mizutani/gollem/llm/openai"
-    "github.com/m-mizutani/gollem/strategy/planexec"
+    "github.com/gollem-dev/gollem"
+    "github.com/gollem-dev/gollem/llm/openai"
+    "github.com/gollem-dev/gollem/strategy/planexec"
 )
 
 func main() {
@@ -86,9 +86,9 @@ import (
     "fmt"
     "os"
 
-    "github.com/m-mizutani/gollem"
-    "github.com/m-mizutani/gollem/llm/openai"
-    "github.com/m-mizutani/gollem/strategy/planexec"
+    "github.com/gollem-dev/gollem"
+    "github.com/gollem-dev/gollem/llm/openai"
+    "github.com/gollem-dev/gollem/strategy/planexec"
 )
 
 func main() {
@@ -474,5 +474,5 @@ See [examples/](../../examples/) directory for complete examples:
 
 ## References
 
-- [gollem documentation](https://github.com/m-mizutani/gollem)
+- [gollem documentation](https://github.com/gollem-dev/gollem)
 - [Plan & Execute Pattern](https://arxiv.org/abs/2305.04091)

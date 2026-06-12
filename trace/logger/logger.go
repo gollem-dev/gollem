@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/m-mizutani/gollem/trace"
+	"github.com/gollem-dev/gollem/trace"
 )
 
 // Event represents a trace event type that can be selectively enabled.

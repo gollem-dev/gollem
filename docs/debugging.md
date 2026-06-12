@@ -11,8 +11,8 @@ import (
     "log/slog"
     "os"
 
-    "github.com/m-mizutani/gollem"
-    tracelogger "github.com/m-mizutani/gollem/trace/logger"
+    "github.com/gollem-dev/gollem"
+    tracelogger "github.com/gollem-dev/gollem/trace/logger"
 )
 
 // Enable all events (default)

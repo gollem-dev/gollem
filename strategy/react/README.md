@@ -30,9 +30,9 @@ import (
     "context"
     "fmt"
 
-    "github.com/m-mizutani/gollem"
-    "github.com/m-mizutani/gollem/llm/openai"
-    "github.com/m-mizutani/gollem/strategy/react"
+    "github.com/gollem-dev/gollem"
+    "github.com/gollem-dev/gollem/llm/openai"
+    "github.com/gollem-dev/gollem/strategy/react"
 )
 
 func main() {
@@ -232,4 +232,4 @@ Ensure your tools return descriptive error messages. The LLM needs to understand
 ## References
 
 - [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629)
-- [gollem documentation](https://github.com/m-mizutani/gollem)
+- [gollem documentation](https://github.com/gollem-dev/gollem)

@@ -16,7 +16,7 @@ This document provides detailed configuration options for each LLM provider supp
 ```go
 import (
     "context"
-    "github.com/m-mizutani/gollem/llm/gemini"
+    "github.com/gollem-dev/gollem/llm/gemini"
 )
 
 client, err := gemini.New(ctx, "your-project-id", "us-central1")
@@ -130,7 +130,7 @@ client, err := gemini.New(ctx, projectID, location,
 ```go
 import (
     "context"
-    "github.com/m-mizutani/gollem/llm/claude"
+    "github.com/gollem-dev/gollem/llm/claude"
 )
 
 client, err := claude.New(ctx, "your-api-key")
@@ -180,7 +180,7 @@ client, err := claude.New(ctx, apiKey,
 ```go
 import (
     "context"
-    "github.com/m-mizutani/gollem/llm/claude"
+    "github.com/gollem-dev/gollem/llm/claude"
 )
 
 client, err := claude.NewWithVertex(ctx, "us-central1", "your-project-id")
@@ -236,7 +236,7 @@ gcloud auth application-default login
 ```go
 import (
     "context"
-    "github.com/m-mizutani/gollem/llm/openai"
+    "github.com/gollem-dev/gollem/llm/openai"
 )
 
 client, err := openai.New(ctx, "your-api-key")
@@ -419,7 +419,7 @@ if err != nil {
 Use the `trace/logger` package to enable detailed logging for LLM interactions:
 
 ```go
-import tracelogger "github.com/m-mizutani/gollem/trace/logger"
+import tracelogger "github.com/gollem-dev/gollem/trace/logger"
 
 // Log LLM requests and responses
 handler := tracelogger.New(

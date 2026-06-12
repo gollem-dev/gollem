@@ -7,10 +7,10 @@ import (
 	"math"
 	"strings"
 
+	"github.com/gollem-dev/gollem"
+	gollemschema "github.com/gollem-dev/gollem/internal/schema"
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem"
-	gollemschema "github.com/m-mizutani/gollem/internal/schema"
-	"github.com/m-mizutani/gollem/trace"
 	"google.golang.org/api/option"
 	"google.golang.org/genai"
 )

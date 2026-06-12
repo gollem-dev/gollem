@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/llm/openai"
-	"github.com/m-mizutani/gollem/trace"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/llm/openai"
+	"github.com/gollem-dev/gollem/trace"
 )
 
 // WeatherTool is a simple tool for demonstration.

@@ -24,8 +24,8 @@ package reflexion
 import (
 	"context"
 
+	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem"
 )
 
 const (

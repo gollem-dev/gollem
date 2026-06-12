@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 )
 
 // formatToolResult formats tool execution result as a JSON string

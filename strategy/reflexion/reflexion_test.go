@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/strategy/reflexion"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/strategy/reflexion"
 	"github.com/m-mizutani/gt"
 )
 

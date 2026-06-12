@@ -3,8 +3,8 @@ package schema
 import (
 	"encoding/json"
 
+	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem"
 )
 
 // CollectRequiredFields returns a list of required property names

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	main "github.com/m-mizutani/gollem/cmd/gollem"
+	main "github.com/gollem-dev/gollem/cmd/gollem"
 	"github.com/m-mizutani/gt"
 )
 

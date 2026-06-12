@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/m-mizutani/gollem"
-	"github.com/m-mizutani/gollem/mcp"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/mcp"
 	"github.com/m-mizutani/gt"
 	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/gollem-dev/gollem/trace"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem/trace"
 )
 
 // SubAgent represents an agent that can be invoked as a tool by parent agent.

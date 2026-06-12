@@ -3,7 +3,7 @@ package planexec
 import (
 	"context"
 
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 )
 
 // TaskState represents the current state of a task

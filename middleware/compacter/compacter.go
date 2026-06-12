@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
-	"github.com/m-mizutani/gollem"
 )
 
 // DefaultSummaryPrompt is the default prompt used for summarizing conversation history

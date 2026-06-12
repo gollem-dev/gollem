@@ -3,7 +3,7 @@ package simple
 import (
 	"context"
 
-	"github.com/m-mizutani/gollem"
+	"github.com/gollem-dev/gollem"
 )
 
 // simpleStrategy implements a simple loop strategy that continues as long as there is input
