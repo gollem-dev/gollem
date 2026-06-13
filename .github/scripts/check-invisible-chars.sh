@@ -38,7 +38,6 @@ EXCLUDES=(
   -g '!*.bz2' -g '!*.xz'
   -g '!*.mp4' -g '!*.mp3' -g '!*.wav' -g '!*.ogg' -g '!*.webm'
   -g '!*.class' -g '!*.jar' -g '!*.so' -g '!*.dll' -g '!*.dylib' -g '!*.exe'
-  -g '!cmd/gollem/frontend/dist/**'
 )
 
 # Pre-flight checks.

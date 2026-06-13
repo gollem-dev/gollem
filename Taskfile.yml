@@ -36,14 +36,3 @@ tasks:
         -rm -skip-ensure
         ./llm/gemini
         apiClient
-  viewer:build:
-    desc: Build the trace viewer frontend
-    dir: cmd/gollem/frontend
-    cmds:
-      - pnpm install
-      - pnpm build
-  viewer:dev:
-    desc: Start the trace viewer frontend dev server
-    dir: cmd/gollem/frontend
-    cmds:
-      - pnpm dev
