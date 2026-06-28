@@ -20,10 +20,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Register tools
+	// Register tools defined with typed handlers. The schema is inferred from the
+	// input struct and the handler receives a decoded value, so there is no manual
+	// type assertion on a map[string]any.
 	tools := []gollem.Tool{
-		&AddTool{},
-		&MultiplyTool{},
+		gollem.MustNewTool("add", "Adds two numbers together", add),
+		gollem.MustNewTool("multiply", "Multiplies two numbers together", multiply),
 	}
 
 	// Create agent with tools
@@ -53,69 +55,32 @@ func main() {
 	log.Printf("📝 Query: %s", query)
 
 	// Execute with automatic session management
-	if err := agent.Execute(ctx, query); err != nil {
+	if _, err := agent.Execute(ctx, gollem.Text(query)); err != nil {
 		log.Fatal(err)
 	}
 
 	log.Printf("✅ Calculation completed!")
 }
 
-// AddTool is a tool that adds two numbers
-type AddTool struct{}
-
-func (t *AddTool) Run(ctx context.Context, args map[string]any) (map[string]any, error) {
-	a := args["a"].(float64)
-	b := args["b"].(float64)
-	result := a + b
-	log.Printf("🔢 Add: %.2f + %.2f = %.2f", a, b, result)
-	return map[string]any{"result": result}, nil
+// operands is the typed input shared by the calculator tools.
+type operands struct {
+	A float64 `json:"a" description:"First number" required:"true"`
+	B float64 `json:"b" description:"Second number" required:"true"`
 }
 
-func (t *AddTool) Spec() gollem.ToolSpec {
-	return gollem.ToolSpec{
-		Name:        "add",
-		Description: "Adds two numbers together",
-		Parameters: map[string]*gollem.Parameter{
-			"a": {
-				Type:        gollem.TypeNumber,
-				Description: "First number",
-				Required:    true,
-			},
-			"b": {
-				Type:        gollem.TypeNumber,
-				Description: "Second number",
-				Required:    true,
-			},
-		},
-	}
+// calcResult is the typed output of the calculator tools.
+type calcResult struct {
+	Result float64 `json:"result" description:"Calculation result"`
 }
 
-// MultiplyTool is a tool that multiplies two numbers
-type MultiplyTool struct{}
-
-func (t *MultiplyTool) Run(ctx context.Context, args map[string]any) (map[string]any, error) {
-	a := args["a"].(float64)
-	b := args["b"].(float64)
-	result := a * b
-	log.Printf("🔢 Multiply: %.2f × %.2f = %.2f", a, b, result)
-	return map[string]any{"result": result}, nil
+func add(_ context.Context, in operands) (calcResult, error) {
+	result := in.A + in.B
+	log.Printf("🔢 Add: %.2f + %.2f = %.2f", in.A, in.B, result)
+	return calcResult{Result: result}, nil
 }
 
-func (t *MultiplyTool) Spec() gollem.ToolSpec {
-	return gollem.ToolSpec{
-		Name:        "multiply",
-		Description: "Multiplies two numbers together",
-		Parameters: map[string]*gollem.Parameter{
-			"a": {
-				Type:        gollem.TypeNumber,
-				Description: "First number",
-				Required:    true,
-			},
-			"b": {
-				Type:        gollem.TypeNumber,
-				Description: "Second number",
-				Required:    true,
-			},
-		},
-	}
+func multiply(_ context.Context, in operands) (calcResult, error) {
+	result := in.A * in.B
+	log.Printf("🔢 Multiply: %.2f × %.2f = %.2f", in.A, in.B, result)
+	return calcResult{Result: result}, nil
 }
