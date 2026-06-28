@@ -39,6 +39,65 @@ func (t *HelloTool) Run(ctx context.Context, args map[string]any) (map[string]an
 }
 ```
 
+## Type-safe Tools with `NewTool`
+
+Implementing `Tool` by hand means writing the `Spec()` parameter map and then
+asserting each argument's type inside `Run` (`args["name"].(string)`). Those two
+places can drift apart, and a wrong assertion panics at runtime.
+
+`NewTool[In, Out]` removes both problems. The input schema is inferred from the
+`In` type (using the same struct tags as [`ToSchema`](schema.md#supported-struct-tags)),
+and your handler receives a decoded `In` value instead of a raw map:
+
+```go
+type greetArgs struct {
+    Name string `json:"name" description:"Name of the person to greet" required:"true"`
+}
+
+type greetResult struct {
+    Message string `json:"message"`
+}
+
+tool, err := gollem.NewTool("hello", "Returns a greeting",
+    func(ctx context.Context, in greetArgs) (greetResult, error) {
+        return greetResult{Message: fmt.Sprintf("Hello, %s!", in.Name)}, nil
+    })
+if err != nil {
+    return err
+}
+```
+
+- `In` must be a **struct**. The handler argument is fully typed — no assertions,
+  no panics. (A map is rejected: it would produce a property-less schema that tells
+  the LLM nothing about the arguments, while giving none of the type safety.)
+- `Out` must encode to a JSON object (a struct, or `map[string]any`). A
+  `map[string]any` result is passed through unchanged, so existing tools can adopt
+  `NewTool` incrementally by keeping their map output.
+- **By default**, argument validation against the inferred schema runs automatically
+  before the handler (see [Using Tools](#using-tools)), and the typed decode is the
+  safety net behind it. If you disable it with `WithDisableArgsValidation`, only the
+  typed decode remains: it enforces field *types*, but not `required`/`enum`/`min`/`max`,
+  so a missing field arrives as its zero value.
+
+`NewTool` returns an error when `In`/`Out` cannot form a valid schema (for example
+a malformed struct tag, or a scalar type). For static registration, use
+`MustNewTool`, which panics instead — convenient inside a slice literal:
+
+```go
+agent := gollem.New(client, gollem.WithTools(
+    gollem.MustNewTool("hello", "Returns a greeting", greet),
+    gollem.MustNewTool("add", "Adds two numbers", add),
+))
+```
+
+To validate a tool's `In`/`Out` types without constructing the tool (for example in
+a test), use `ToolSchema[In, Out]()` (returns an error) or `MustToolSchema[In, Out]()`
+(panics). Both reuse the same inference, so they agree with what `NewTool` produces.
+
+> [!NOTE]
+> `ToolSchema` (tool input/output check) is distinct from `ToSchema` (single
+> struct → schema). See [schema.md](schema.md#creating-schemas-from-go-structs).
+
 ## Tool Specification
 
 The `ToolSpec` defines the tool's interface:

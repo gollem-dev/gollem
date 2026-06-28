@@ -22,6 +22,9 @@ var (
 	// ErrInvalidInputSchema is returned when the input schema from MCP is invalid or unsupported.
 	ErrInvalidInputSchema = errors.New("invalid input schema")
 
+	// ErrInvalidToolType is returned when a typed tool's In/Out type parameter cannot form a valid schema.
+	ErrInvalidToolType = errors.New("invalid tool type")
+
 	// ErrInvalidHistoryData is returned when the history data is invalid or unsupported.
 	ErrInvalidHistoryData = errors.New("invalid history data")
 

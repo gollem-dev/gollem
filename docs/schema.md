@@ -416,6 +416,24 @@ var userSchema = gollem.MustToSchema(UserProfile{})
 // Panics if conversion fails
 ```
 
+### ToolSchema / MustToolSchema
+
+`ToSchema` converts a single Go value into a schema. When defining a **tool**, use
+`ToolSchema[In, Out]()` instead: it infers the input schema from the `In` type and
+also verifies that the `Out` type can form a valid tool result (a JSON object).
+
+```go
+// Returns the input parameter schema; errors if In/Out are not valid tool types.
+schema, err := gollem.ToolSchema[AddArgs, AddResult]()
+
+// Panics on error — useful as a startup assertion of a tool's In/Out types.
+schema := gollem.MustToolSchema[AddArgs, AddResult]()
+```
+
+These power [`NewTool` / `MustNewTool`](tools.md#type-safe-tools-with-newtool), which
+build a `Tool` directly from typed handlers. `Out` has no slot in `ToolSpec`, so it is
+validated (not returned) to ensure the handler's result is convertible to the wire form.
+
 ### Complete Example
 
 See [examples/json_schema](../examples/json_schema) for a complete working example.
