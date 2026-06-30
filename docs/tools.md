@@ -90,9 +90,33 @@ agent := gollem.New(client, gollem.WithTools(
 ))
 ```
 
-To validate a tool's `In`/`Out` types without constructing the tool (for example in
-a test), use `ToolSchema[In, Out]()` (returns an error) or `MustToolSchema[In, Out]()`
-(panics). Both reuse the same inference, so they agree with what `NewTool` produces.
+### Validating Tool Types
+
+To validate a tool's `In`/`Out` types without constructing the tool, use
+`ToolSchema[In, Out]()` (returns an error) or `MustToolSchema[In, Out]()` (panics).
+Both reuse the same inference as `NewTool`, so they agree with what it produces.
+
+The primary use is a **startup assertion**: a malformed `In`/`Out` type (a bad
+struct tag, a scalar type, etc.) is a programming error, and you want it to surface
+when the program starts rather than on the first LLM call. Declare a package-level
+assertion so the binary fails to start if the types ever become invalid:
+
+```go
+// Fail fast at package initialization if greetArgs/greetResult ever stop
+// forming a valid tool schema (e.g. a struct tag is broken in a refactor).
+var _ = gollem.MustToolSchema[greetArgs, greetResult]()
+```
+
+In a test, prefer the error-returning `ToolSchema` so the failure is reported as a
+test failure rather than a panic:
+
+```go
+func TestGreetToolSchema(t *testing.T) {
+    if _, err := gollem.ToolSchema[greetArgs, greetResult](); err != nil {
+        t.Fatalf("invalid tool schema: %v", err)
+    }
+}
+```
 
 > [!NOTE]
 > `ToolSchema` (tool input/output check) is distinct from `ToSchema` (single
