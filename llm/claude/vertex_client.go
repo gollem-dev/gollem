@@ -93,6 +93,18 @@ func WithVertexEffort(effort Effort) VertexOption {
 	}
 }
 
+// WithVertexAdaptiveThinking sends thinking {"type":"adaptive","display":display}
+// on every request of the client's sessions. An empty display sends
+// {"type":"adaptive"} and leaves the display to the model default. When not
+// set, no thinking is sent and the model default applies. A model that does
+// not accept adaptive thinking rejects the request.
+func WithVertexAdaptiveThinking(display ThinkingDisplay) VertexOption {
+	return func(c *VertexClient) {
+		c.params.adaptiveThinking = true
+		c.params.thinkingDisplay = display
+	}
+}
+
 // WithVertexSystemPrompt sets the system prompt for the client.
 func WithVertexSystemPrompt(prompt string) VertexOption {
 	return func(c *VertexClient) {

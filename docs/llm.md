@@ -220,6 +220,27 @@ client, err := claude.New(ctx, apiKey,
 
 When `WithEffort` is not called, gollem does not send `effort`, and the model default applies. The default model, `claude-sonnet-4-5-20250929`, does not support effort, so select a model that supports it with `WithModel`. Which levels a model accepts depends on the model; see the [Anthropic effort documentation](https://platform.claude.com/docs/en/build-with-claude/effort). gollem does not check the level against the model, so the API rejects a level the model does not support. For Vertex AI, use `claude.WithVertexEffort` with the same constants.
 
+#### Thinking configuration
+
+`WithAdaptiveThinking` sends `thinking` with the type `adaptive` on every `Generate` and `Stream` request of the client's sessions. Its argument is sent as `thinking.display`, which decides whether the thinking text is returned.
+
+```go
+client, err := claude.New(ctx, apiKey,
+    claude.WithModel("claude-sonnet-5-5"),
+    claude.WithAdaptiveThinking(claude.ThinkingDisplaySummarized),
+)
+```
+
+| Argument | `thinking` sent | Thinking text |
+| --- | --- | --- |
+| `claude.ThinkingDisplaySummarized` | `{"type":"adaptive","display":"summarized"}` | A summary is returned in `Response.Thoughts` |
+| `claude.ThinkingDisplayOmitted` | `{"type":"adaptive","display":"omitted"}` | Thinking blocks are returned with empty text |
+| `""` | `{"type":"adaptive"}` | The model's default display applies |
+
+When `WithAdaptiveThinking` is not called, gollem sends no `thinking`, and the model's defaults decide whether the model thinks and whether the thinking text is returned. According to the [Anthropic thinking documentation](https://platform.claude.com/docs/en/build-with-claude/thinking), Claude Opus 4.6 does not think when `thinking` is not sent. Claude Sonnet 5.5 thinks adaptively and returns its thinking blocks with empty text, because its default display is `omitted`. To receive the thinking text of such a model, pass `claude.ThinkingDisplaySummarized`.
+
+gollem does not check the setting against the model. A model that does not accept adaptive thinking rejects the request with HTTP 400: `Generate` returns the error, and `Stream` returns it in `Response.Error`. Claude Opus 4.5, Sonnet 4.5 and Haiku 4.5 reject it, so the default model `claude-sonnet-4-5-20250929` does too. See the Anthropic documentation for the settings each model accepts. To control how much the model thinks, use [`WithEffort`](#effort). For Vertex AI, use `claude.WithVertexAdaptiveThinking` with the same constants.
+
 #### Max tokens
 
 The Anthropic Messages API requires `max_tokens` on every request, so gollem always sends a value. When `WithMaxTokens` is not called, gollem sends the model's documented maximum output tokens:
@@ -307,6 +328,17 @@ client, err := claude.NewWithVertex(ctx, region, projectID,
 ```
 
 `WithVertexEffort` follows the same rules as `claude.WithEffort` — see [Effort](#effort) above. The default Vertex AI model, `claude-sonnet-4@20250514`, does not support effort, so select a model that supports it with `WithVertexModel`.
+
+#### Thinking configuration
+
+```go
+client, err := claude.NewWithVertex(ctx, region, projectID,
+    claude.WithVertexModel(modelID), // a Vertex AI model ID of a model that accepts adaptive thinking
+    claude.WithVertexAdaptiveThinking(claude.ThinkingDisplaySummarized),
+)
+```
+
+`WithVertexAdaptiveThinking` follows the same rules as `claude.WithAdaptiveThinking` — see [Thinking configuration](#thinking-configuration) above. When it is not called, gollem sends no `thinking`, and the model's defaults apply.
 
 #### System Prompt
 

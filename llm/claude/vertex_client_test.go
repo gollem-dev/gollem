@@ -582,3 +582,47 @@ func TestWithVertexEffort(t *testing.T) {
 	t.Run("stream", runTest(testCase{effort: claude.EffortLow, stream: true, expected: `{"effort":"low"}`}))
 	t.Run("not set", runTest(testCase{}))
 }
+
+func TestWithVertexAdaptiveThinking(t *testing.T) {
+	type testCase struct {
+		options  []claude.VertexOption
+		expected string
+	}
+
+	runTest := func(tc testCase) func(t *testing.T) {
+		return func(t *testing.T) {
+			for _, stream := range []bool{false, true} {
+				rs := newRecordingServer(t, "ok")
+				anthropicClient := anthropic.NewClient(
+					option.WithAPIKey("test-key"),
+					option.WithBaseURL(rs.srv.URL),
+					option.WithMaxRetries(0),
+				)
+				options := append([]claude.VertexOption{claude.WithVertexModel("claude-sonnet-5-5")}, tc.options...)
+				client := claude.NewVertexClientWithAnthropicClient(&anthropicClient, options...)
+				session, err := client.NewSession(context.Background())
+				gt.NoError(t, err).Required()
+
+				requestPath{stream: stream}.send(t, session)
+
+				thinking, ok := rs.lastBody(t)["thinking"]
+				if tc.expected == "" {
+					gt.False(t, ok)
+					continue
+				}
+				gt.True(t, ok).Required()
+				assertJSONEqual(t, tc.expected, thinking)
+			}
+		}
+	}
+
+	t.Run("not set", runTest(testCase{}))
+	t.Run("summarized", runTest(testCase{
+		options:  []claude.VertexOption{claude.WithVertexAdaptiveThinking(claude.ThinkingDisplaySummarized)},
+		expected: `{"type":"adaptive","display":"summarized"}`,
+	}))
+	t.Run("omitted", runTest(testCase{
+		options:  []claude.VertexOption{claude.WithVertexAdaptiveThinking(claude.ThinkingDisplayOmitted)},
+		expected: `{"type":"adaptive","display":"omitted"}`,
+	}))
+}

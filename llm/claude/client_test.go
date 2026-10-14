@@ -1623,6 +1623,222 @@ func (ss *scriptedServer) lastMessages(t *testing.T) []map[string]any {
 	return messages
 }
 
+func (ss *scriptedServer) lastBody(t *testing.T) map[string]json.RawMessage {
+	t.Helper()
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	gt.A(t, ss.bodies).Longer(0).Required()
+	return ss.bodies[len(ss.bodies)-1]
+}
+
+// sentToolUseInputs returns the input bytes of every tool_use block in a request
+// body, exactly as they were sent.
+func sentToolUseInputs(t *testing.T, body map[string]json.RawMessage) []string {
+	t.Helper()
+	var messages []struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	}
+	gt.NoError(t, json.Unmarshal(body["messages"], &messages)).Required()
+	var inputs []string
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.Type == "tool_use" {
+				inputs = append(inputs, string(block.Input))
+			}
+		}
+	}
+	return inputs
+}
+
+// sdkToolUseInput returns the bytes the SDK sends as the input of a tool_use block
+// built from raw. The SDK re-escapes strings on encoding, so this, not raw itself,
+// is what a request carries when the arguments JSON is passed through unchanged.
+func sdkToolUseInput(t *testing.T, raw string) string {
+	t.Helper()
+	data, err := json.Marshal(anthropic.MessageNewParams{
+		Model:     "m",
+		MaxTokens: 1,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewAssistantMessage(anthropic.NewToolUseBlock("toolu_1", json.RawMessage(raw), "fetch")),
+		},
+	})
+	gt.NoError(t, err).Required()
+	var body map[string]json.RawMessage
+	gt.NoError(t, json.Unmarshal(data, &body)).Required()
+	inputs := sentToolUseInputs(t, body)
+	gt.A(t, inputs).Length(1).Required()
+	return inputs[0]
+}
+
+// apiToolInput is the arguments JSON the API returns for a tool call in the tests
+// below. Its keys are not in alphabetical order and its strings carry JSON unicode
+// escapes for "&" and a hiragana letter (\x5c is a backslash), so re-encoding the
+// parsed arguments changes the bytes.
+const apiToolInput = "{\"url\":\"https://example.com/?b=2\x5cu0026a=1\",\"zeta\":1,\"alpha\":\"\x5cu3042/\"}"
+
+// newToolUseServer answers every request with one tool_use block whose input is
+// apiToolInput. A streaming response splits the input into two input_json_delta
+// fragments.
+func newToolUseServer(t *testing.T) *scriptedServer {
+	t.Helper()
+	cut := strings.Index(apiToolInput, `"zeta"`)
+	events := [][2]string{
+		{"message_start", sseMessageStart},
+		{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"fetch","input":{}}}`},
+	}
+	for _, fragment := range []string{apiToolInput[:cut], apiToolInput[cut:]} {
+		partial, err := json.Marshal(fragment)
+		gt.NoError(t, err).Required()
+		events = append(events, [2]string{"content_block_delta",
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":` + string(partial) + `}}`})
+	}
+	events = append(events, [2]string{"content_block_stop", `{"type":"content_block_stop","index":0}`})
+	events = append(events, sseMessageEnd...)
+	return newScriptedServer(t,
+		messageJSON(`{"type":"tool_use","id":"toolu_1","name":"fetch","input":`+apiToolInput+`}`), events)
+}
+
+// sendToolResult answers the tool call toolu_1 through Generate or Stream.
+func (p requestPath) sendToolResult(t *testing.T, session gollem.Session) {
+	t.Helper()
+	ctx := context.Background()
+	input := []gollem.Input{gollem.FunctionResponse{ID: "toolu_1", Name: "fetch", Data: map[string]any{"ok": true}}}
+	if !p.stream {
+		_, err := session.Generate(ctx, input)
+		gt.NoError(t, err).Required()
+		return
+	}
+	ch, err := session.Stream(ctx, input)
+	gt.NoError(t, err).Required()
+	for resp := range ch {
+		gt.NoError(t, resp.Error)
+	}
+}
+
+// restoreHistory saves the session history as JSON and loads it back, as an
+// application that keeps the conversation between requests does.
+func restoreHistory(t *testing.T, session gollem.Session) *gollem.History {
+	t.Helper()
+	h, err := session.History()
+	gt.NoError(t, err).Required()
+	data, err := json.Marshal(h)
+	gt.NoError(t, err).Required()
+	var restored gollem.History
+	gt.NoError(t, json.Unmarshal(data, &restored)).Required()
+	return &restored
+}
+
+// reencodedToolInput is the input sent when the arguments are encoded again from
+// the parsed map: the keys come out in alphabetical order.
+func reencodedToolInput(t *testing.T) string {
+	t.Helper()
+	var args map[string]any
+	gt.NoError(t, json.Unmarshal([]byte(apiToolInput), &args)).Required()
+	input, err := claude.ToolUseInput(args)
+	gt.NoError(t, err).Required()
+	return sdkToolUseInput(t, string(input))
+}
+
+func TestToolCallInputSurvivesHistoryRoundTrip(t *testing.T) {
+	const model = "claude-sonnet-5-5"
+	expected := sdkToolUseInput(t, apiToolInput)
+	// The case only tells key orders apart if re-encoding changes the bytes.
+	gt.NotEqual(t, expected, reencodedToolInput(t))
+
+	for _, p := range requestPaths {
+		t.Run(p.name, func(t *testing.T) {
+			t.Run("through a saved and restored history", func(t *testing.T) {
+				ss := newToolUseServer(t)
+				first := p.newSession(t, ss.srv.URL, model)
+				p.send(t, first)
+
+				next := p.newSession(t, ss.srv.URL, model, gollem.WithSessionHistory(restoreHistory(t, first)))
+				p.sendToolResult(t, next)
+				gt.Equal(t, []string{expected}, sentToolUseInputs(t, ss.lastBody(t)))
+			})
+
+			t.Run("in the same session", func(t *testing.T) {
+				ss := newToolUseServer(t)
+				session := p.newSession(t, ss.srv.URL, model)
+				p.send(t, session)
+				p.sendToolResult(t, session)
+				gt.Equal(t, []string{expected}, sentToolUseInputs(t, ss.lastBody(t)))
+			})
+		})
+	}
+}
+
+func TestToolCallInputUsesArgumentsWhenEdited(t *testing.T) {
+	const model = "claude-sonnet-5-5"
+	ss := newToolUseServer(t)
+	first := newAPISession(t, ss.srv.URL, model)
+	requestPath{}.send(t, first)
+
+	h := restoreHistory(t, first)
+	contents := assistantContents(t, h)
+	gt.A(t, contents).Length(1).Required()
+	if contents[0].Provider == nil {
+		t.Fatal("tool call has no provider data")
+	}
+	edited, err := gollem.NewToolCallContent("toolu_1", "fetch", map[string]any{"url": "https://example.org/"})
+	gt.NoError(t, err).Required()
+	edited.Provider = contents[0].Provider
+	contents[0] = edited
+
+	next := newAPISession(t, ss.srv.URL, model, gollem.WithSessionHistory(h))
+	requestPath{}.sendToolResult(t, next)
+	gt.Equal(t, []string{`{"url":"https://example.org/"}`}, sentToolUseInputs(t, ss.lastBody(t)))
+}
+
+func TestToolCallInputNotSentToOtherIssuer(t *testing.T) {
+	const model = "claude-sonnet-5-5"
+	ss := newToolUseServer(t)
+	first := newScopedAPISession(t, ss.srv.URL, model, "a")
+	requestPath{}.send(t, first)
+
+	next := newScopedAPISession(t, ss.srv.URL, model, "b", gollem.WithSessionHistory(restoreHistory(t, first)))
+	requestPath{}.sendToolResult(t, next)
+	gt.Equal(t, []string{reencodedToolInput(t)}, sentToolUseInputs(t, ss.lastBody(t)))
+}
+
+func TestStreamToolCallWithoutArguments(t *testing.T) {
+	const model = "claude-sonnet-5-5"
+	events := append([][2]string{
+		{"message_start", sseMessageStart},
+		{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"fetch","input":{}}}`},
+		{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+	}, sseMessageEnd...)
+
+	for _, p := range requestPaths {
+		if !p.stream {
+			continue
+		}
+		t.Run(p.name, func(t *testing.T) {
+			ss := newScriptedServer(t, "", events)
+			first := p.newSession(t, ss.srv.URL, model)
+			p.send(t, first)
+
+			h, err := first.History()
+			gt.NoError(t, err).Required()
+			contents := assistantContents(t, h)
+			gt.A(t, contents).Length(1).Required()
+			gt.Equal(t, gollem.MessageContentTypeToolCall, contents[0].Type)
+			if contents[0].Provider == nil {
+				t.Fatal("tool call has no provider data")
+			}
+			gt.Equal(t, gollem.Issuer{Provider: gollem.LLMTypeClaude, Model: model}, contents[0].Provider.Issuer)
+
+			// The input of content_block_start is sent back, as Generate does.
+			next := p.newSession(t, ss.srv.URL, model, gollem.WithSessionHistory(h))
+			p.sendToolResult(t, next)
+			gt.Equal(t, []string{"{}"}, sentToolUseInputs(t, ss.lastBody(t)))
+		})
+	}
+}
+
 // blockTypes returns the content block types of every message, in order.
 func blockTypes(messages []map[string]any) [][]string {
 	var out [][]string
@@ -1848,6 +2064,65 @@ func TestWithEffort(t *testing.T) {
 
 		requestPath{}.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
 		assertJSONEqual(t, `{"effort":"high","format":`+structuredOutputTestFormat+`}`, rs.lastBody(t)["output_config"])
+	})
+}
+
+func TestWithAdaptiveThinking(t *testing.T) {
+	type testCase struct {
+		options  []claude.Option
+		expected string
+	}
+
+	runTest := func(tc testCase) func(t *testing.T) {
+		return func(t *testing.T) {
+			for _, stream := range []bool{false, true} {
+				rs := newRecordingServer(t, "ok")
+				options := append([]claude.Option{claude.WithBaseURL(rs.srv.URL), claude.WithModel("claude-sonnet-5-5")}, tc.options...)
+				client, err := claude.New(context.Background(), "test-key", options...)
+				gt.NoError(t, err).Required()
+				session, err := client.NewSession(context.Background())
+				gt.NoError(t, err).Required()
+
+				requestPath{stream: stream}.send(t, session)
+
+				thinking, ok := rs.lastBody(t)["thinking"]
+				if tc.expected == "" {
+					gt.False(t, ok)
+					continue
+				}
+				gt.True(t, ok).Required()
+				assertJSONEqual(t, tc.expected, thinking)
+			}
+		}
+	}
+
+	t.Run("not set", runTest(testCase{}))
+	t.Run("summarized", runTest(testCase{
+		options:  []claude.Option{claude.WithAdaptiveThinking(claude.ThinkingDisplaySummarized)},
+		expected: `{"type":"adaptive","display":"summarized"}`,
+	}))
+	t.Run("omitted", runTest(testCase{
+		options:  []claude.Option{claude.WithAdaptiveThinking(claude.ThinkingDisplayOmitted)},
+		expected: `{"type":"adaptive","display":"omitted"}`,
+	}))
+	t.Run("empty display leaves display to the model", runTest(testCase{
+		options:  []claude.Option{claude.WithAdaptiveThinking("")},
+		expected: `{"type":"adaptive"}`,
+	}))
+
+	t.Run("sent together with effort", func(t *testing.T) {
+		rs := newRecordingServer(t, "ok")
+		client, err := claude.New(context.Background(), "test-key",
+			claude.WithBaseURL(rs.srv.URL), claude.WithModel("claude-sonnet-5-5"),
+			claude.WithAdaptiveThinking(claude.ThinkingDisplaySummarized), claude.WithEffort(claude.EffortHigh))
+		gt.NoError(t, err).Required()
+		session, err := client.NewSession(context.Background())
+		gt.NoError(t, err).Required()
+
+		requestPath{}.send(t, session)
+		body := rs.lastBody(t)
+		assertJSONEqual(t, `{"type":"adaptive","display":"summarized"}`, body["thinking"])
+		assertJSONEqual(t, `{"effort":"high"}`, body["output_config"])
 	})
 }
 
