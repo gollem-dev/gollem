@@ -118,7 +118,7 @@ type Issuer struct {
 }
 ```
 
-Two issuers are the same only when all three fields are equal. The built-in clients record their issuer on every thinking content, including the reasoning of OpenAI and Ollama, which has no signature. The Gemini client also records it on text, tool call, image and PDF content that carries a thought signature.
+Two issuers are the same only when all three fields are equal. The built-in clients record their issuer on every thinking content, including the reasoning of OpenAI and Ollama, which has no signature. The Gemini client also records it on text, tool call, image and PDF content that carries a thought signature. The Claude client also records it on every tool call the API returned, together with the arguments JSON as the API returned it. When the history is sent back to the same issuer and that JSON still decodes to the tool call's `Arguments`, the client sends that JSON instead of encoding `Arguments`, so the keys keep the order the API returned. The Anthropic SDK still applies its own string escaping when it sends the request, so the bytes can differ from the API response. When `Arguments` have been edited, or the destination is another issuer, the client encodes `Arguments`, which sorts the keys alphabetically.
 
 Before a client converts a history to its API format, it applies `gollem.FilterProviderData` with its own issuer as the destination:
 

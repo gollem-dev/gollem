@@ -420,6 +420,121 @@ func TestToolUseInputSendsNumbersAsNumbers(t *testing.T) {
 	gt.S(t, string(wire)).NotContains(`"id":"` + wide)
 }
 
+// toolUseInputOf returns the input of the tool_use block at messages[0].Content[0]
+// as the bytes that will be sent.
+func toolUseInputOf(t *testing.T, messages []anthropic.MessageParam) string {
+	t.Helper()
+	gt.A(t, messages).Longer(0).Required()
+	gt.A(t, messages[0].Content).Longer(0).Required()
+	toolUse := messages[0].Content[0].OfToolUse
+	if toolUse == nil {
+		t.Fatal("first block is not tool_use")
+	}
+	input, ok := toolUse.Input.(json.RawMessage)
+	gt.True(t, ok).Required()
+	return string(input)
+}
+
+func TestNewHistoryRecordsToolUseInput(t *testing.T) {
+	issuer := gollem.Issuer{Provider: gollem.LLMTypeClaude, Model: "claude-test", Scope: "tenant-a"}
+
+	type testCase struct {
+		input    any
+		recorded bool
+		expected string
+	}
+
+	runTest := func(tc testCase) func(t *testing.T) {
+		return func(t *testing.T) {
+			history, err := claude.NewHistory([]anthropic.MessageParam{
+				anthropic.NewAssistantMessage(anthropic.NewToolUseBlock("call_1", tc.input, "search")),
+			}, issuer)
+			gt.NoError(t, err).Required()
+
+			content := history.Messages[0].Contents[0]
+			if !tc.recorded {
+				gt.Nil(t, content.Provider)
+			} else {
+				if content.Provider == nil {
+					t.Fatal("tool call has no provider data")
+				}
+				gt.Equal(t, issuer, content.Provider.Issuer)
+			}
+
+			restored, err := claude.ToMessages(history, issuer)
+			gt.NoError(t, err).Required()
+			gt.Equal(t, tc.expected, toolUseInputOf(t, restored))
+		}
+	}
+
+	t.Run("raw JSON input is recorded and sent back", runTest(testCase{
+		input:    json.RawMessage(`{"zeta":1,"alpha":"x"}`),
+		recorded: true,
+		expected: `{"zeta":1,"alpha":"x"}`,
+	}))
+	t.Run("string JSON input is recorded and sent back", runTest(testCase{
+		input:    `{"zeta":1,"alpha":"x"}`,
+		recorded: true,
+		expected: `{"zeta":1,"alpha":"x"}`,
+	}))
+	t.Run("integer wider than float64 is recorded and sent back", runTest(testCase{
+		input:    json.RawMessage(`{"zeta":9007199254740993,"alpha":1}`),
+		recorded: true,
+		expected: `{"zeta":9007199254740993,"alpha":1}`,
+	}))
+	t.Run("number literals that re-encoding rewrites are recorded and sent back", runTest(testCase{
+		input:    json.RawMessage(`{"zeta":1e20,"beta":2.50,"alpha":1}`),
+		recorded: true,
+		expected: `{"zeta":1e20,"beta":2.50,"alpha":1}`,
+	}))
+	t.Run("map input built by the caller is not recorded", runTest(testCase{
+		input:    map[string]any{"zeta": 1, "alpha": "x"},
+		recorded: false,
+		expected: `{"alpha":"x","zeta":1}`,
+	}))
+	t.Run("null input is not recorded", runTest(testCase{
+		input:    json.RawMessage(`null`),
+		recorded: false,
+		expected: `null`,
+	}))
+}
+
+func TestToolCallInputWithoutProviderData(t *testing.T) {
+	// A tool call saved before the arguments JSON was recorded has no provider data.
+	call, err := gollem.NewToolCallContent("call_1", "search", map[string]any{"zeta": 1, "alpha": "x"})
+	gt.NoError(t, err).Required()
+	history := &gollem.History{
+		Version:  gollem.HistoryVersion,
+		Messages: []gollem.Message{{Role: gollem.RoleAssistant, Contents: []gollem.MessageContent{call}}},
+	}
+
+	messages, err := claude.ToMessages(history, testIssuer)
+	gt.NoError(t, err).Required()
+	gt.Equal(t, `{"alpha":"x","zeta":1}`, toolUseInputOf(t, messages))
+}
+
+func TestToMessagesRejectsBrokenToolUseInput(t *testing.T) {
+	runTest := func(data string) func(t *testing.T) {
+		return func(t *testing.T) {
+			call, err := gollem.NewToolCallContent("call_1", "search", map[string]any{"q": "x"})
+			gt.NoError(t, err).Required()
+			call.Provider = &gollem.ProviderData{Issuer: testIssuer, Data: json.RawMessage(data)}
+			history := &gollem.History{
+				Version:  gollem.HistoryVersion,
+				Messages: []gollem.Message{{Role: gollem.RoleAssistant, Contents: []gollem.MessageContent{call}}},
+			}
+
+			_, err = claude.ToMessages(history, testIssuer)
+			gt.Error(t, err)
+		}
+	}
+
+	t.Run("recorded input is not JSON", runTest(`{"input":"not json"}`))
+	t.Run("recorded input is not an object", runTest(`{"input":"[1]"}`))
+	t.Run("recorded input is null", runTest(`{"input":"null"}`))
+	t.Run("provider data is not JSON", runTest(`{`))
+}
+
 // The trace handler reads tool_use arguments back out of the request blocks. Those blocks
 // now carry json.RawMessage, so a type assertion for a map alone would trace every
 // history-replayed tool call with no arguments at all.

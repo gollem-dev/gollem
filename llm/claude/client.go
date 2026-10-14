@@ -42,7 +42,27 @@ type generationParameters struct {
 	// effort is sent as output_config.effort. Empty means not sent, so the
 	// model default applies.
 	effort Effort
+
+	// adaptiveThinking records whether the caller chose adaptive thinking.
+	// When false, no thinking is sent and the model default applies.
+	adaptiveThinking bool
+
+	// thinkingDisplay is sent as thinking.display when adaptiveThinking is
+	// set. Empty means not sent.
+	thinkingDisplay ThinkingDisplay
 }
+
+// ThinkingDisplay is the display sent as thinking.display with adaptive
+// thinking. It controls whether the thinking text is returned. See
+// https://platform.claude.com/docs/en/build-with-claude/thinking
+type ThinkingDisplay string
+
+const (
+	// ThinkingDisplaySummarized returns a summary of the thinking text.
+	ThinkingDisplaySummarized ThinkingDisplay = "summarized"
+	// ThinkingDisplayOmitted returns thinking blocks with empty text and a signature.
+	ThinkingDisplayOmitted ThinkingDisplay = "omitted"
+)
 
 // Effort is the effort level sent as output_config.effort. It controls how many
 // tokens Claude spends on a response, including text, tool calls and thinking.
@@ -170,6 +190,18 @@ func WithMaxTokens(maxTokens int64) Option {
 func WithEffort(effort Effort) Option {
 	return func(c *Client) {
 		c.params.effort = effort
+	}
+}
+
+// WithAdaptiveThinking sends thinking {"type":"adaptive","display":display}
+// on every request of the client's sessions. An empty display sends
+// {"type":"adaptive"} and leaves the display to the model default. When not
+// set, no thinking is sent and the model default applies. A model that does
+// not accept adaptive thinking rejects the request.
+func WithAdaptiveThinking(display ThinkingDisplay) Option {
+	return func(c *Client) {
+		c.params.adaptiveThinking = true
+		c.params.thinkingDisplay = display
 	}
 }
 
@@ -530,6 +562,13 @@ func buildMessageParams(
 	if params.effort != "" {
 		request.OutputConfig.Effort = anthropic.OutputConfigEffort(params.effort)
 	}
+	if params.adaptiveThinking {
+		request.Thinking = anthropic.ThinkingConfigParamUnion{
+			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+				Display: anthropic.ThinkingConfigAdaptiveDisplay(params.thinkingDisplay),
+			},
+		}
+	}
 
 	systemPrompt, err := createSystemPrompt(ctx, cfg, structuredOutputs)
 	if err != nil {
@@ -645,6 +684,8 @@ func generateClaudeStream(
 	// Accumulate the response blocks, in index order, for message history
 	var blocks streamBlocks
 	acc := newFunctionCallAccumulator()
+	// toolUseStartInput is the input of the latest tool_use content_block_start.
+	var toolUseStartInput json.RawMessage
 	var totalInputTokens int
 	var totalOutputTokens int
 	var totalCacheCreation int
@@ -743,6 +784,7 @@ func generateClaudeStream(
 					toolUseBlock := startEvent.ContentBlock.AsToolUse()
 					acc.ID = toolUseBlock.ID
 					acc.Name = toolUseBlock.Name
+					toolUseStartInput = toolUseBlock.Input
 					blocks.at(startEvent.Index, streamBlockToolUse)
 				case "text":
 					blocks.at(startEvent.Index, streamBlockText)
@@ -767,12 +809,17 @@ func generateClaudeStream(
 					response.OutputToken = totalOutputTokens
 					response.CacheCreationInputToken = totalCacheCreation
 					response.CacheReadInputToken = totalCacheRead
-					input, err := toolUseInput(funcCall.Arguments)
-					if err != nil {
-						response.Error = goerr.Wrap(err, "failed to encode tool call arguments",
-							goerr.V("tool", funcCall.Name))
-						responseChan <- response
-						return
+					// The session history keeps the arguments JSON as received, as
+					// resp.ToParam() does for Generate. accumulate() has already
+					// rejected anything that is not a JSON object.
+					input := json.RawMessage(acc.Arguments)
+					if acc.Arguments == "" {
+						input, err = streamedToolUseInputWithoutDelta(toolUseStartInput, funcCall)
+						if err != nil {
+							response.Error = err
+							responseChan <- response
+							return
+						}
 					}
 					blocks.at(event.AsContentBlockStop().Index, streamBlockToolUse).toolUse =
 						anthropic.NewToolUseBlock(funcCall.ID, input, funcCall.Name)
@@ -1314,6 +1361,27 @@ func (a *FunctionCallAccumulator) accumulate() (*gollem.FunctionCall, error) {
 		Name:      a.Name,
 		Arguments: args,
 	}, nil
+}
+
+// streamedToolUseInputWithoutDelta returns the input of a streamed tool_use block
+// for which no input_json_delta arrived. The input of content_block_start, {} for
+// a call without arguments, is then the whole input the API returned. When it is
+// not a JSON object, the arguments are encoded from funcCall as before.
+func streamedToolUseInputWithoutDelta(startInput json.RawMessage, funcCall *gollem.FunctionCall) (json.RawMessage, error) {
+	if len(startInput) > 0 {
+		args, err := jsonutil.DecodeObject(startInput)
+		if err != nil {
+			return nil, goerr.Wrap(err, "failed to decode tool call input", goerr.V("tool", funcCall.Name))
+		}
+		if args != nil {
+			return startInput, nil
+		}
+	}
+	input, err := toolUseInput(funcCall.Arguments)
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to encode tool call arguments", goerr.V("tool", funcCall.Name))
+	}
+	return input, nil
 }
 
 // Stream processes the input and generates a response stream with optional per-call overrides.

@@ -24,6 +24,15 @@
             "arguments": {
               "location": "Tokyo"
             }
+          },
+          "provider": {
+            "issuer": {
+              "provider": "claude",
+              "model": "claude-test"
+            },
+            "data": {
+              "input": "{\"location\":\"Tokyo\"}"
+            }
           }
         }
       ]

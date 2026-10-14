@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/gollem-dev/gollem"
@@ -18,12 +19,16 @@ import (
 type claudePartMeta struct {
 	Signature string `json:"signature,omitempty"` // Signature for thinking blocks
 	Redacted  bool   `json:"redacted,omitempty"`  // Whether this is a redacted thinking block
+	// Input is the arguments JSON of a tool_use block as the API returned it.
+	// It is a string rather than json.RawMessage: encoding/json rewrites the
+	// bytes of an embedded RawMessage (HTML escaping), a string survives.
+	Input string `json:"input,omitempty"`
 }
 
 // marshalClaudePartMeta marshals claudePartMeta to JSON for MessageContent.Provider.Data.
 // Returns nil if no metadata needs to be stored.
 func marshalClaudePartMeta(m claudePartMeta) (json.RawMessage, error) {
-	if !m.Redacted && m.Signature == "" {
+	if !m.Redacted && m.Signature == "" && m.Input == "" {
 		return nil, nil
 	}
 	data, err := json.Marshal(m)
@@ -100,6 +105,70 @@ func toolUseInput(args map[string]any) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.RawMessage(raw), nil
+}
+
+// toolCallInput returns the input of the tool_use block to send for call: the
+// arguments JSON the API returned, recorded in provider, while it still decodes
+// to call.Arguments, and otherwise the arguments encoded by toolUseInput.
+//
+// The comparison keeps an edit to call.Arguments (by a middleware or the caller)
+// from being silently replaced by the recorded JSON.
+func toolCallInput(call *gollem.ToolCallContent, provider *gollem.ProviderData) (json.RawMessage, error) {
+	recorded, err := recordedToolCallInput(call, provider)
+	if err != nil {
+		return nil, err
+	}
+	if recorded != nil {
+		return recorded, nil
+	}
+
+	input, err := toolUseInput(call.Arguments)
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to encode tool call arguments", goerr.V("tool", call.Name))
+	}
+	return input, nil
+}
+
+// recordedToolCallInput returns the arguments JSON recorded in provider when it
+// decodes to call.Arguments, and nil when nothing is recorded or the arguments
+// differ.
+func recordedToolCallInput(call *gollem.ToolCallContent, provider *gollem.ProviderData) (json.RawMessage, error) {
+	if provider == nil {
+		return nil, nil
+	}
+	meta, err := unmarshalClaudePartMeta(provider.Data)
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to decode tool call provider data", goerr.V("tool", call.Name))
+	}
+	if meta.Input == "" {
+		return nil, nil
+	}
+
+	recorded, err := jsonutil.DecodeObject([]byte(meta.Input))
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to decode recorded tool call input", goerr.V("tool", call.Name))
+	}
+	// Only a JSON object is recorded, so null here means the data was altered.
+	if recorded == nil {
+		return nil, goerr.New("recorded tool call input is not a JSON object", goerr.V("tool", call.Name))
+	}
+
+	// call.Arguments was encoded into the content and decoded back, which can
+	// change how a number decodes: 1e20 is re-encoded as an integer literal and
+	// then kept as json.Number. The recorded value takes the same round trip so
+	// that unedited arguments compare equal.
+	content, err := gollem.NewToolCallContent(call.ID, call.Name, recorded)
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to encode recorded tool call input", goerr.V("tool", call.Name))
+	}
+	stored, err := content.GetToolCallContent()
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to decode recorded tool call input", goerr.V("tool", call.Name))
+	}
+	if !reflect.DeepEqual(stored.Arguments, call.Arguments) {
+		return nil, nil
+	}
+	return json.RawMessage(meta.Input), nil
 }
 
 // collectClaudeToolNames maps each tool_use ID to the tool name it called. Claude's
@@ -200,19 +269,26 @@ func convertClaudeContentBlock(block anthropic.ContentBlockParamUnion, toolNames
 
 	// Handle tool use blocks
 	if block.OfToolUse != nil {
-		// Convert input to map if it's not already
+		// Convert input to map if it's not already. raw keeps the arguments JSON as the
+		// API returned it, which is only known when the input arrives as JSON text. JSON
+		// null also decodes without error, but it is not an object and is not recorded.
 		var args map[string]interface{}
+		var raw string
 		switch v := block.OfToolUse.Input.(type) {
 		case map[string]interface{}:
 			args = v
 		case json.RawMessage:
-			// The shape convertContentToClaude produces.
+			// The shape resp.ToParam(), the stream accumulator and convertContentToClaude
+			// produce.
 			parsed, err := jsonutil.DecodeObject(v)
 			if err != nil {
 				return gollem.MessageContent{}, goerr.Wrap(err, "failed to decode tool use input",
 					goerr.V("tool", block.OfToolUse.Name))
 			}
 			args = parsed
+			if parsed != nil {
+				raw = string(v)
+			}
 		case string:
 			// A tool_use input arriving as a string is the raw arguments JSON. When it does
 			// not parse, the string itself is the only thing left to carry, so keep it under
@@ -222,6 +298,9 @@ func convertClaudeContentBlock(block anthropic.ContentBlockParamUnion, toolNames
 				args = map[string]interface{}{"input": v}
 			} else {
 				args = parsed
+				if parsed != nil {
+					raw = v
+				}
 			}
 		default:
 			// Convert to JSON then back to map
@@ -237,11 +316,25 @@ func convertClaudeContentBlock(block anthropic.ContentBlockParamUnion, toolNames
 			}
 		}
 
-		return gollem.NewToolCallContent(
+		mc, err := gollem.NewToolCallContent(
 			block.OfToolUse.ID,
 			block.OfToolUse.Name,
 			args,
 		)
+		if err != nil {
+			return gollem.MessageContent{}, err
+		}
+		// The API requires a turn with thinking blocks to come back unmodified, and
+		// re-encoding args sorts the keys. The original JSON is recorded so that
+		// toolCallInput can send it back to the same issuer.
+		if raw != "" {
+			meta, err := marshalClaudePartMeta(claudePartMeta{Input: raw})
+			if err != nil {
+				return gollem.MessageContent{}, err
+			}
+			mc.Provider = &gollem.ProviderData{Issuer: issuer, Data: meta}
+		}
+		return mc, nil
 	}
 
 	// Handle tool result blocks
@@ -440,10 +533,9 @@ func convertContentToClaude(content gollem.MessageContent, messageRole gollem.Me
 		if err != nil {
 			return anthropic.ContentBlockParamUnion{}, err
 		}
-		input, err := toolUseInput(toolCall.Arguments)
+		input, err := toolCallInput(toolCall, content.Provider)
 		if err != nil {
-			return anthropic.ContentBlockParamUnion{}, goerr.Wrap(err, "failed to encode tool call arguments",
-				goerr.V("tool", toolCall.Name))
+			return anthropic.ContentBlockParamUnion{}, err
 		}
 		return anthropic.NewToolUseBlock(toolCall.ID, input, toolCall.Name), nil
 
