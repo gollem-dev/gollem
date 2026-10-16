@@ -71,7 +71,9 @@ if err != nil {
   no panics. (A map `In` is rejected: tool arguments are a fixed set of named
   parameters, which a map cannot describe. A map **field** of the struct is
   supported and is sent to every provider as an object with
-  `additionalProperties`; see [Maps](schema.md#maps).)
+  `additionalProperties`; see [Maps](schema.md#maps). A union of several
+  shapes cannot be declared on a struct; build a `ToolSpec` by hand with
+  `Parameter.AnyOf` for that; see [Unions](schema.md#unions).)
 - `Out` must encode to a JSON object (a struct, or `map[string]any`). A
   `map[string]any` result is passed through unchanged, so existing tools can adopt
   `NewTool` incrementally by keeping their map output.

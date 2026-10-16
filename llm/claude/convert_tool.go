@@ -29,7 +29,9 @@ func convertTool(tool gollem.Tool) anthropic.ToolUnionParam {
 }
 
 type jsonSchema struct {
-	Type       string                `json:"type"`
+	// Type is empty only for a union (AnyOf), which has no type of its own.
+	Type       string                `json:"type,omitempty"`
+	AnyOf      []jsonSchema          `json:"anyOf,omitempty"`
 	Properties map[string]jsonSchema `json:"properties,omitempty"`
 	Required   []string              `json:"required,omitempty"`
 	Items      *jsonSchema           `json:"items,omitempty"`
@@ -70,6 +72,15 @@ func convertParametersToJSONSchema(params map[string]*gollem.Parameter) jsonSche
 
 // convertParameterToSchema converts gollem.Parameter to Claude schema
 func convertParameterToSchema(param *gollem.Parameter) jsonSchema {
+	if len(param.AnyOf) > 0 {
+		return jsonSchema{
+			AnyOf:       gollemschema.ConvertAnyOf(param.AnyOf, convertParameterToSchema),
+			Description: param.Description,
+			Title:       param.Title,
+			Default:     param.Default,
+		}
+	}
+
 	schema := jsonSchema{
 		Type:        getClaudeType(param.Type),
 		Description: param.Description,

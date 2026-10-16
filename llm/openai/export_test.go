@@ -50,6 +50,13 @@ func NewSessionWithAPIClient(client apiClient, cfg gollem.SessionConfig, model s
 	}, nil
 }
 
+// EnableStrictMode turns on strict mode for the response schema of a Chat
+// Completions session. No option sets it, so tests that send a strict schema
+// to the API set it here.
+func EnableStrictMode(session gollem.Session) {
+	session.(*Session).strictMode = true
+}
+
 // GetBaseURL returns the base URL from an OpenAI client for testing
 func GetBaseURL(client *Client) string {
 	return client.baseURL

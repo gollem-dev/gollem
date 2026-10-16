@@ -542,3 +542,53 @@ func TestConvertToolIsByteStable(t *testing.T) {
 		gt.Equal(t, string(first), string(actual))
 	}
 }
+
+// newBlocksParameter returns an object whose "blocks" array holds a union of
+// two object kinds told apart by a single-value "kind" enum.
+func newBlocksParameter() *gollem.Parameter {
+	return &gollem.Parameter{
+		Type: gollem.TypeObject,
+		Properties: map[string]*gollem.Parameter{
+			"blocks": {
+				Type:     gollem.TypeArray,
+				Required: true,
+				Items: &gollem.Parameter{
+					Description: "a block",
+					AnyOf: []*gollem.Parameter{
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"paragraph"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+							},
+						},
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"callout"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+								"tone": {Type: gollem.TypeString, Enum: []string{"info", "warning"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// blocksGenaiSchema is the genai.Schema JSON of newBlocksParameter. The union
+// has no "type"; each element has its own.
+const blocksGenaiSchema = `{"properties":{"blocks":{"items":{"anyOf":[` +
+	`{"properties":{"kind":{"enum":["paragraph"],"type":"STRING"},"text":{"type":"STRING"}},"required":["kind","text"],"type":"OBJECT"},` +
+	`{"properties":{"kind":{"enum":["callout"],"type":"STRING"},"text":{"type":"STRING"},"tone":{"enum":["info","warning"],"type":"STRING"}},"required":["kind","text"],"type":"OBJECT"}` +
+	`],"description":"a block"},"type":"ARRAY"}},"required":["blocks"],"type":"OBJECT"}`
+
+func TestConvertParameterToSchemaAnyOf(t *testing.T) {
+	param := newBlocksParameter()
+	for range 20 {
+		out, err := json.Marshal(gemini.ConvertParameterToSchema(param))
+		gt.NoError(t, err)
+		gt.Equal(t, blocksGenaiSchema, string(out))
+	}
+}

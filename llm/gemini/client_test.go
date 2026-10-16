@@ -2081,6 +2081,148 @@ func TestSetResponseSchemaMap(t *testing.T) {
 	})
 }
 
+type blocksArgsTool struct{}
+
+func (blocksArgsTool) Spec() gollem.ToolSpec {
+	return gollem.ToolSpec{
+		Name:       "write_blocks",
+		Parameters: newBlocksParameter().Properties,
+	}
+}
+
+func (blocksArgsTool) Run(ctx context.Context, args map[string]any) (map[string]any, error) {
+	return nil, nil
+}
+
+func TestAnyOfIsSentAsGenaiSchema(t *testing.T) {
+	t.Run("response schema", func(t *testing.T) {
+		for range 20 {
+			config := &genai.GenerateContentConfig{}
+			gt.NoError(t, gemini.SetResponseSchema(config, newBlocksParameter()))
+			gt.Nil(t, config.ResponseJsonSchema)
+			raw, err := json.Marshal(config.ResponseSchema)
+			gt.NoError(t, err)
+			gt.Equal(t, blocksGenaiSchema, string(raw))
+		}
+	})
+
+	t.Run("tool parameters", func(t *testing.T) {
+		for range 20 {
+			decl := gemini.ConvertToolToNewSDK(blocksArgsTool{})
+			gt.Nil(t, decl.ParametersJsonSchema)
+			raw, err := json.Marshal(decl.Parameters)
+			gt.NoError(t, err)
+			gt.Equal(t, blocksGenaiSchema, string(raw))
+		}
+	})
+
+	t.Run("map inside a union element is sent as JSON Schema", func(t *testing.T) {
+		param := newBlocksParameter()
+		param.Properties["blocks"].Items.AnyOf[0].Properties["attrs"] = &gollem.Parameter{
+			Type:                 gollem.TypeObject,
+			AdditionalProperties: &gollem.Parameter{Type: gollem.TypeString},
+		}
+		config := &genai.GenerateContentConfig{}
+		gt.NoError(t, gemini.SetResponseSchema(config, param))
+		gt.Nil(t, config.ResponseSchema)
+		raw, err := json.Marshal(config.ResponseJsonSchema)
+		gt.NoError(t, err)
+		gt.S(t, string(raw)).Contains(`"items":{"anyOf":[{"additionalProperties":false,"properties":{"attrs":{"additionalProperties":{"type":"string"},"type":"object"}`)
+	})
+}
+
+// blocksPrompt asks for a reply that uses both kinds of newBlocksParameter.
+const blocksPrompt = "Write a three-block note about tea: a paragraph, a warning callout, then a paragraph. Reply in JSON."
+
+// assertBlocksReply decodes a reply to newBlocksParameter and checks that each
+// block matches exactly one kind and carries only that kind's fields.
+func assertBlocksReply(t *testing.T, text string) {
+	t.Helper()
+	var reply struct {
+		Blocks []map[string]any `json:"blocks"`
+	}
+	gt.NoError(t, json.Unmarshal([]byte(text), &reply)).Required()
+	gt.A(t, reply.Blocks).Longer(0)
+
+	kinds := newBlocksParameter().Properties["blocks"].Items.AnyOf
+	seen := map[string]bool{}
+	for i, block := range reply.Blocks {
+		matched := 0
+		for _, kind := range kinds {
+			if kind.ValidateValue("block", block) != nil {
+				continue
+			}
+			matched++
+			for key := range block {
+				if _, ok := kind.Properties[key]; !ok {
+					t.Errorf("block %d has field %q that its kind does not define: %v", i, key, block)
+				}
+			}
+		}
+		if matched != 1 {
+			t.Errorf("block %d matches %d kinds, want 1: %v", i, matched, block)
+		}
+		kind, _ := block["kind"].(string)
+		seen[kind] = true
+	}
+	if !seen["paragraph"] || !seen["callout"] {
+		t.Errorf("reply must hold both a paragraph and a callout: %v", reply.Blocks)
+	}
+}
+
+func TestAnyOfLive(t *testing.T) {
+	projectID, ok := os.LookupEnv("TEST_GCP_PROJECT_ID")
+	if !ok {
+		t.Skip("TEST_GCP_PROJECT_ID is not set")
+	}
+	location, ok := os.LookupEnv("TEST_GCP_LOCATION")
+	if !ok {
+		t.Skip("TEST_GCP_LOCATION is not set")
+	}
+
+	newClient := func(t *testing.T, ctx context.Context) *gemini.Client {
+		var opts []gemini.Option
+		if model := os.Getenv("TEST_GCP_MODEL"); model != "" {
+			opts = append(opts, gemini.WithModel(model))
+		}
+		client, err := gemini.New(ctx, projectID, location, opts...)
+		gt.NoError(t, err).Required()
+		return client
+	}
+
+	t.Run("response schema", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*testTimeout)
+		defer cancel()
+
+		session, err := newClient(t, ctx).NewSession(ctx)
+		gt.NoError(t, err).Required()
+		resp, err := session.Generate(ctx, []gollem.Input{gollem.Text(blocksPrompt)},
+			gollem.WithGenerateResponseSchema(newBlocksParameter()))
+		gt.NoError(t, err).Required()
+		gt.A(t, resp.Texts).Length(1).Required()
+		t.Logf("reply: %s", resp.Texts[0])
+		assertBlocksReply(t, resp.Texts[0])
+	})
+
+	t.Run("function declaration", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*testTimeout)
+		defer cancel()
+
+		session, err := newClient(t, ctx).NewSession(ctx, gollem.WithSessionTools(blocksArgsTool{}))
+		gt.NoError(t, err).Required()
+		resp, err := session.Generate(ctx, []gollem.Input{gollem.Text(
+			"Call write_blocks with a three-block note about tea: a paragraph, a warning callout, then a paragraph.")})
+		gt.NoError(t, err).Required()
+		gt.A(t, resp.FunctionCalls).Longer(0).Required()
+		args, err := json.Marshal(resp.FunctionCalls[0].Arguments)
+		gt.NoError(t, err)
+		t.Logf("arguments: %s", args)
+		spec := blocksArgsTool{}.Spec()
+		gt.NoError(t, spec.ValidateArgs(resp.FunctionCalls[0].Arguments))
+		assertBlocksReply(t, string(args))
+	})
+}
+
 func TestPerCallResponseSchemaFormMix(t *testing.T) {
 	type testCase struct {
 		session     *genai.GenerateContentConfig

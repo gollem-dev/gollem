@@ -36,6 +36,19 @@ func convertTool(tool gollem.Tool) openai.Tool {
 
 // convertParameterToSchema converts gollem.Parameter to OpenAI schema
 func convertParameterToSchema(param *gollem.Parameter) map[string]interface{} {
+	// A union has no type of its own; each element carries its type.
+	if len(param.AnyOf) > 0 {
+		schema := map[string]interface{}{
+			"anyOf":       gollemschema.ConvertAnyOf(param.AnyOf, convertParameterToSchema),
+			"description": param.Description,
+			"title":       param.Title,
+		}
+		if param.Default != nil {
+			schema["default"] = param.Default
+		}
+		return schema
+	}
+
 	schema := map[string]interface{}{
 		"type":        getOpenAIType(param.Type),
 		"description": param.Description,

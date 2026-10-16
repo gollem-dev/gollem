@@ -35,6 +35,15 @@ func convertTool(tool gollem.Tool) *genai.FunctionDeclaration {
 
 // convertParameterToSchema converts gollem.Parameter to Gemini schema
 func convertParameterToSchema(param *gollem.Parameter) *genai.Schema {
+	// A union leaves Type unset; each element carries its type.
+	if len(param.AnyOf) > 0 {
+		return &genai.Schema{
+			AnyOf:       gollemschema.ConvertAnyOf(param.AnyOf, convertParameterToSchema),
+			Description: param.Description,
+			Title:       param.Title,
+		}
+	}
+
 	schema := &genai.Schema{
 		Type:        getGeminiType(param.Type),
 		Description: param.Description,

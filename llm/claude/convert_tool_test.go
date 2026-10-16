@@ -280,7 +280,55 @@ func TestConvertParameterToSchemaRequiredIsSorted(t *testing.T) {
 	gt.Equal(t, []string{"alpha", "mike", "zulu"}, schema.Required)
 }
 
-// TestConvertToolCarriesDescriptionAndRequired pins that the tool definition
+// newBlocksParameter returns an object whose "blocks" array holds a union of
+// two object kinds told apart by a single-value "kind" enum.
+func newBlocksParameter() *gollem.Parameter {
+	return &gollem.Parameter{
+		Type: gollem.TypeObject,
+		Properties: map[string]*gollem.Parameter{
+			"blocks": {
+				Type:     gollem.TypeArray,
+				Required: true,
+				Items: &gollem.Parameter{
+					Description: "a block",
+					AnyOf: []*gollem.Parameter{
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"paragraph"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+							},
+						},
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"callout"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+								"tone": {Type: gollem.TypeString, Enum: []string{"info", "warning"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestConvertParameterToSchemaAnyOf(t *testing.T) {
+	const expected = `{"type":"object","properties":{"blocks":{"type":"array","items":{"anyOf":[` +
+		`{"type":"object","properties":{"kind":{"type":"string","enum":["paragraph"]},"text":{"type":"string"}},"required":["kind","text"]},` +
+		`{"type":"object","properties":{"kind":{"type":"string","enum":["callout"]},"text":{"type":"string"},"tone":{"type":"string","enum":["info","warning"]}},"required":["kind","text"]}` +
+		`],"description":"a block"}}},"required":["blocks"]}`
+
+	param := newBlocksParameter()
+	for range 20 {
+		out, err := json.Marshal(claude.ConvertParameterToSchema(param))
+		gt.NoError(t, err)
+		gt.Equal(t, expected, string(out))
+	}
+}
+
+// TestConvertToolIsByteStable pins that the tool definition
 // sent to Claude keeps the fields that describe the tool. Both are set on the
 // ToolParam variant rather than by ToolUnionParamOfTool, so an omission here is
 // silent: the request stays valid but the model loses the tool description and

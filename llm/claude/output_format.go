@@ -25,6 +25,12 @@ import (
 // To send such a schema, use a configuration without structured outputs (e.g.
 // WithVertexStructuredOutputsDisabled), in which the schema is written into
 // the system prompt.
+//
+// The same page limits "Parameters with union types" to 16: the total number of
+// parameters that use anyOf or type arrays across all strict schemas of a
+// request. Tools are not sent with strict: true, so the response schema is the
+// only strict schema, and a schema with more than 16 parameters with AnyOf is
+// rejected with gollem.ErrUnsupportedSchema instead of a 400 from the API.
 func outputFormat(param *gollem.Parameter) (anthropic.JSONOutputFormatParam, error) {
 	if err := param.Validate(); err != nil {
 		return anthropic.JSONOutputFormatParam{}, goerr.Wrap(err, "invalid response schema")
@@ -34,8 +40,17 @@ func outputFormat(param *gollem.Parameter) (anthropic.JSONOutputFormatParam, err
 			fmt.Sprintf("map at %q cannot be sent as Claude structured outputs, which require additionalProperties to be false", path),
 			goerr.V("path", path))
 	}
+	if count := gollemschema.CountAnyOf(param); count > maxUnionParameters {
+		return anthropic.JSONOutputFormatParam{}, goerr.Wrap(gollem.ErrUnsupportedSchema,
+			fmt.Sprintf("schema has %d parameters with anyOf, more than the %d that Claude structured outputs accepts", count, maxUnionParameters),
+			goerr.V("count", count), goerr.V("limit", maxUnionParameters))
+	}
 	return anthropic.JSONOutputFormatParam{Schema: outputSchema(param)}, nil
 }
+
+// maxUnionParameters is the "Parameters with union types" limit of Claude
+// structured outputs.
+const maxUnionParameters = 16
 
 // outputSchema converts a parameter into the JSON Schema subset that
 // structured outputs accepts.
@@ -46,7 +61,24 @@ func outputFormat(param *gollem.Parameter) (anthropic.JSONOutputFormatParam, err
 // are removed from the schema and restated in the description, so the model is
 // still told about them; the API does not enforce them and this package does
 // not validate the response against them.
+//
+// A union is sent as "anyOf" with each element converted by this function, so
+// each object element gets additionalProperties false and its own rejected
+// constraints restated in its description.
 func outputSchema(param *gollem.Parameter) map[string]any {
+	if len(param.AnyOf) > 0 {
+		schema := map[string]any{
+			"anyOf": gollemschema.ConvertAnyOf(param.AnyOf, outputSchema),
+		}
+		if param.Default != nil {
+			schema["default"] = param.Default
+		}
+		if param.Description != "" {
+			schema["description"] = param.Description
+		}
+		return schema
+	}
+
 	schema := map[string]any{
 		"type": string(param.Type),
 	}

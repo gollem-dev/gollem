@@ -109,7 +109,8 @@ type Parameter struct {
 	// Title is the user friendly  of the parameter. It's optional.
 	Title string
 
-	// Type is the type of the parameter. It's required.
+	// Type is the type of the parameter. It is required when AnyOf is nil and
+	// must be empty when AnyOf is set.
 	Type ParameterType
 
 	// Description is the description of the parameter. It's optional.
@@ -141,6 +142,33 @@ type Parameter struct {
 	//     additionalProperties to be false on every object.
 	AdditionalProperties *Parameter
 
+	// AnyOf lists the alternative schemas a value may match; the value is valid
+	// when it matches at least one. When AnyOf is set, the parameter itself
+	// carries no type of its own: Type, Properties, Items, AdditionalProperties,
+	// Enum and the constraints must be empty, and only Title, Description,
+	// Required and Default may be set. AnyOf needs at least two elements.
+	//
+	// It is sent as JSON Schema "anyOf" at any depth. A typical use is an array
+	// whose items are objects of several kinds, each kind an element of AnyOf
+	// with a single-value Enum property (e.g. "kind") that tells them apart.
+	// Properties are sent in ascending name order and constrained decoding
+	// writes them in that order, so give that property a name that comes first
+	// among the required properties of every element; otherwise the model can
+	// only produce the elements in which it comes first.
+	//
+	// Where it is accepted:
+	//   - Tool definitions: accepted by Claude, OpenAI, Gemini and Ollama.
+	//   - Response schemas: accepted by Claude (structured outputs and the
+	//     system-prompt schema), OpenAI (with and without strict mode), Gemini
+	//     and Ollama, whose server turns "anyOf" into a grammar alternation.
+	//   - Rejected with ErrUnsupportedSchema before calling the API:
+	//       - Claude structured outputs, when the schema has more than 16
+	//         parameters with AnyOf; the API counts them across all strict
+	//         schemas and rejects a request above that limit.
+	//       - OpenAI strict mode, when AnyOf is set on the root of the
+	//         response schema; the root must be an object.
+	AnyOf []*Parameter
+
 	// Number constraints
 	Minimum *float64
 	Maximum *float64
@@ -161,6 +189,10 @@ type Parameter struct {
 // Validate validates the parameter.
 func (p *Parameter) Validate() error {
 	eb := goerr.NewBuilder(goerr.V("parameter", p))
+
+	if p.AnyOf != nil {
+		return p.validateAnyOf()
+	}
 
 	// Type is required
 	if p.Type == "" {
@@ -246,6 +278,71 @@ func (p *Parameter) Validate() error {
 	return nil
 }
 
+// validateAnyOf validates a parameter that has AnyOf. The union has no type of
+// its own, so every field that describes a type must be empty; the elements
+// carry the types.
+func (p *Parameter) validateAnyOf() error {
+	eb := goerr.NewBuilder(goerr.V("parameter", p))
+
+	var typed []string
+	if p.Type != "" {
+		typed = append(typed, "type")
+	}
+	if p.Properties != nil {
+		typed = append(typed, "properties")
+	}
+	if p.Items != nil {
+		typed = append(typed, "items")
+	}
+	if p.AdditionalProperties != nil {
+		typed = append(typed, "additionalProperties")
+	}
+	if p.Enum != nil {
+		typed = append(typed, "enum")
+	}
+	if p.Minimum != nil {
+		typed = append(typed, "minimum")
+	}
+	if p.Maximum != nil {
+		typed = append(typed, "maximum")
+	}
+	if p.MinLength != nil {
+		typed = append(typed, "minLength")
+	}
+	if p.MaxLength != nil {
+		typed = append(typed, "maxLength")
+	}
+	if p.Pattern != "" {
+		typed = append(typed, "pattern")
+	}
+	if p.MinItems != nil {
+		typed = append(typed, "minItems")
+	}
+	if p.MaxItems != nil {
+		typed = append(typed, "maxItems")
+	}
+	if len(typed) > 0 {
+		return eb.Wrap(ErrInvalidParameter,
+			fmt.Sprintf("anyOf must not be combined with %s", strings.Join(typed, ", ")),
+			goerr.V("fields", typed))
+	}
+
+	if len(p.AnyOf) < 2 {
+		return eb.Wrap(ErrInvalidParameter, "anyOf needs at least two elements",
+			goerr.V("count", len(p.AnyOf)))
+	}
+
+	for i, alt := range p.AnyOf {
+		if alt == nil {
+			return eb.Wrap(ErrInvalidParameter, fmt.Sprintf("anyOf[%d] must not be nil", i))
+		}
+		if err := alt.Validate(); err != nil {
+			return eb.Wrap(err, fmt.Sprintf("invalid anyOf[%d]", i), goerr.V("index", i))
+		}
+	}
+	return nil
+}
+
 // ValidateValue validates a value against this parameter's specification.
 // It checks required, type, enum, and constraint validations.
 // Returns nil if the value is valid, or an error describing the validation failure.
@@ -258,6 +355,10 @@ func (p *Parameter) ValidateValue(name string, value any) error {
 			return eb.Wrap(ErrInvalidParameter, "required parameter missing")
 		}
 		return nil // Optional parameter with no value is valid
+	}
+
+	if len(p.AnyOf) > 0 {
+		return p.validateAnyOfValue(name, value)
 	}
 
 	// Type validation
@@ -409,6 +510,31 @@ func (p *Parameter) ValidateValue(name string, value any) error {
 	}
 
 	return nil
+}
+
+// validateAnyOfValue accepts value when it matches at least one element of
+// AnyOf. When none matches, the error message lists every element's failure,
+// because the message is what tool argument validation returns to the model
+// and the model needs each reason to correct the value.
+func (p *Parameter) validateAnyOfValue(name string, value any) error {
+	failures := make([]string, 0, len(p.AnyOf))
+	for i, alt := range p.AnyOf {
+		err := alt.ValidateValue(name, value)
+		if err == nil {
+			return nil
+		}
+		failure := fmt.Sprintf("anyOf[%d]: %s", i, err.Error())
+		// Each element reports the path of the value that failed; nested
+		// failures name a property or item below name, which the message alone
+		// would not show.
+		if path, ok := goerr.Values(err)["parameter"].(string); ok && path != name {
+			failure = fmt.Sprintf("anyOf[%d]: %s at %q", i, err.Error(), path)
+		}
+		failures = append(failures, failure)
+	}
+	return goerr.Wrap(ErrInvalidParameter,
+		fmt.Sprintf("value matches none of anyOf (%s)", strings.Join(failures, "; ")),
+		goerr.V("parameter", name), goerr.V("failures", failures))
 }
 
 // Tool is specification and execution of an action that can be called by the LLM.

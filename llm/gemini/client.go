@@ -1161,7 +1161,20 @@ func convertToolToNewSDK(tool gollem.Tool) *genai.FunctionDeclaration {
 }
 
 // convertParameterToNewSchema converts gollem.Parameter to new SDK's schema
+//
+// A union is sent in genai.Schema.AnyOf with Type left unset. The Vertex AI
+// documentation for controlled generation lists anyOf among the supported
+// responseSchema fields, and function declaration parameters use the same
+// Schema type.
 func convertParameterToNewSchema(param *gollem.Parameter) *genai.Schema {
+	if len(param.AnyOf) > 0 {
+		return &genai.Schema{
+			AnyOf:       gollemschema.ConvertAnyOf(param.AnyOf, convertParameterToNewSchema),
+			Description: param.Description,
+			Title:       param.Title,
+		}
+	}
+
 	schema := &genai.Schema{
 		Type:        getNewGeminiType(param.Type),
 		Description: param.Description,

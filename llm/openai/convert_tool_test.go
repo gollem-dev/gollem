@@ -208,3 +208,17 @@ func TestConvertToolIsByteStable(t *testing.T) {
 		gt.Equal(t, string(first), string(actual))
 	}
 }
+
+func TestConvertParameterToSchemaAnyOf(t *testing.T) {
+	const expected = `{"description":"","properties":{"blocks":{"description":"","items":{"anyOf":[` +
+		`{"description":"","properties":{"kind":{"description":"","enum":["paragraph"],"title":"","type":"string"},"text":{"description":"","title":"","type":"string"}},"required":["kind","text"],"title":"","type":"object"},` +
+		`{"description":"","properties":{"kind":{"description":"","enum":["callout"],"title":"","type":"string"},"text":{"description":"","title":"","type":"string"},"tone":{"description":"","enum":["info","warning"],"title":"","type":"string"}},"required":["kind","text"],"title":"","type":"object"}` +
+		`],"description":"a block","title":""},"title":"","type":"array"}},"required":["blocks"],"title":"","type":"object"}`
+
+	param := newBlocksParameter()
+	for range 20 {
+		out, err := json.Marshal(openai.ConvertParameterToSchema(param))
+		gt.NoError(t, err)
+		gt.Equal(t, expected, string(out))
+	}
+}

@@ -43,8 +43,9 @@ type sentReasoning struct {
 
 type sentTextConfig struct {
 	Format *struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type   string          `json:"type"`
+		Name   string          `json:"name"`
+		Schema json.RawMessage `json:"schema"`
 	} `json:"format"`
 	Verbosity string `json:"verbosity"`
 }
@@ -617,6 +618,25 @@ func TestResponsesPerCallOptions(t *testing.T) {
 		gt.V(t, req.Text.Format).NotNil().Required()
 		gt.Equal(t, "json_schema", req.Text.Format.Type)
 		gt.Equal(t, "answer", req.Text.Format.Name)
+	})
+
+	t.Run("response schema with a union is sent as anyOf", func(t *testing.T) {
+		rs := newResponsesServer(t, replyJSON(textReplyBody))
+		session, err := rs.client(t).NewSession(context.Background())
+		gt.NoError(t, err).Required()
+
+		_, err = session.Generate(context.Background(), []gollem.Input{gollem.Text("hi")},
+			gollem.WithGenerateResponseSchema(newBlocksParameter()))
+		gt.NoError(t, err).Required()
+
+		req := rs.sent()[0]
+		gt.V(t, req.Text).NotNil().Required()
+		gt.V(t, req.Text.Format).NotNil().Required()
+		schema := req.Text.Format.Schema
+		gt.Equal(t, `{"additionalProperties":false,"properties":{"blocks":{"items":{"anyOf":[`+
+			`{"additionalProperties":false,"properties":{"kind":{"enum":["paragraph"],"type":"string"},"text":{"type":"string"}},"required":["kind","text"],"type":"object"},`+
+			`{"additionalProperties":false,"properties":{"kind":{"enum":["callout"],"type":"string"},"text":{"type":"string"},"tone":{"enum":["info","warning"],"type":"string"}},"required":["kind","text"],"type":"object"}`+
+			`],"description":"a block"},"type":"array"}},"required":["blocks"],"type":"object"}`, string(schema))
 	})
 
 	t.Run("tool calls disabled sends tool_choice none", func(t *testing.T) {

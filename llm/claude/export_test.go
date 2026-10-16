@@ -19,6 +19,7 @@ var (
 	ResolveMaxOutputTokens        = resolveMaxOutputTokens
 	ToolUseInput                  = toolUseInput
 	OutputSchema                  = outputSchema
+	OutputFormat                  = outputFormat
 	SupportsStructuredOutputs     = supportsStructuredOutputs
 	ToMessages                    = toMessages
 	NewHistory                    = newHistory

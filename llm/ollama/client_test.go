@@ -1218,6 +1218,46 @@ func TestIntegration(t *testing.T) {
 		gt.True(t, ok)
 	})
 
+	t.Run("response schema with a union", func(t *testing.T) {
+		session := newTestSession(t, client,
+			gollem.WithSessionContentType(gollem.ContentTypeJSON),
+			gollem.WithSessionResponseSchema(newBlocksParameter()))
+		resp, err := session.Generate(ctx, []gollem.Input{gollem.Text(
+			"Write a three-block note about tea: a paragraph, a warning callout, then a paragraph. Reply in JSON.")})
+		gt.NoError(t, err).Required()
+		gt.A(t, resp.Texts).Longer(0).Required()
+
+		var reply struct {
+			Blocks []map[string]any `json:"blocks"`
+		}
+		gt.NoError(t, json.Unmarshal([]byte(strings.Join(resp.Texts, "")), &reply)).Required()
+		gt.A(t, reply.Blocks).Longer(0)
+		kinds := newBlocksParameter().Properties["blocks"].Items.AnyOf
+		seen := map[string]bool{}
+		for i, block := range reply.Blocks {
+			matched := 0
+			for _, kind := range kinds {
+				if kind.ValidateValue("block", block) != nil {
+					continue
+				}
+				matched++
+				for key := range block {
+					if _, ok := kind.Properties[key]; !ok {
+						t.Errorf("block %d has field %q that its kind does not define: %v", i, key, block)
+					}
+				}
+			}
+			if matched != 1 {
+				t.Errorf("block %d matches %d kinds, want 1: %v", i, matched, block)
+			}
+			kind, _ := block["kind"].(string)
+			seen[kind] = true
+		}
+		if !seen["paragraph"] || !seen["callout"] {
+			t.Errorf("reply must hold both a paragraph and a callout: %v", reply.Blocks)
+		}
+	})
+
 	t.Run("context overflow is tagged", func(t *testing.T) {
 		small := newIntegrationClient(t, ollama.WithThink(false), ollama.WithNumCtx(512))
 		session := newTestSession(t, small)

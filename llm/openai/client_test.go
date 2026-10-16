@@ -1335,6 +1335,153 @@ func TestConvertResponseSchemaToOpenAIMap(t *testing.T) {
 	})
 }
 
+// newBlocksParameter returns an object whose "blocks" array holds a union of
+// two object kinds told apart by a single-value "kind" enum.
+func newBlocksParameter() *gollem.Parameter {
+	return &gollem.Parameter{
+		Type: gollem.TypeObject,
+		Properties: map[string]*gollem.Parameter{
+			"blocks": {
+				Type:     gollem.TypeArray,
+				Required: true,
+				Items: &gollem.Parameter{
+					Description: "a block",
+					AnyOf: []*gollem.Parameter{
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"paragraph"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+							},
+						},
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"callout"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+								"tone": {Type: gollem.TypeString, Enum: []string{"info", "warning"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestConvertResponseSchemaToOpenAIAnyOf(t *testing.T) {
+	runTest := func(strict bool, expected string) func(t *testing.T) {
+		return func(t *testing.T) {
+			param := newBlocksParameter()
+			for range 20 {
+				format, err := openai.ConvertResponseSchemaToOpenAI(param, strict)
+				gt.NoError(t, err)
+				gt.Equal(t, expected, string(format.Schema.(json.RawMessage)))
+			}
+		}
+	}
+
+	t.Run("strict mode requires every property of each element", runTest(true,
+		`{"additionalProperties":false,"properties":{"blocks":{"items":{"anyOf":[`+
+			`{"additionalProperties":false,"properties":{"kind":{"enum":["paragraph"],"type":"string"},"text":{"type":"string"}},"required":["kind","text"],"type":"object"},`+
+			`{"additionalProperties":false,"properties":{"kind":{"enum":["callout"],"type":"string"},"text":{"type":"string"},"tone":{"enum":["info","warning"],"type":"string"}},"required":["kind","text","tone"],"type":"object"}`+
+			`],"description":"a block"},"type":"array"}},"required":["blocks"],"type":"object"}`))
+
+	t.Run("non-strict mode requires the marked properties", runTest(false,
+		`{"additionalProperties":false,"properties":{"blocks":{"items":{"anyOf":[`+
+			`{"additionalProperties":false,"properties":{"kind":{"enum":["paragraph"],"type":"string"},"text":{"type":"string"}},"required":["kind","text"],"type":"object"},`+
+			`{"additionalProperties":false,"properties":{"kind":{"enum":["callout"],"type":"string"},"text":{"type":"string"},"tone":{"enum":["info","warning"],"type":"string"}},"required":["kind","text"],"type":"object"}`+
+			`],"description":"a block"},"type":"array"}},"required":["blocks"],"type":"object"}`))
+
+	rootUnion := func() *gollem.Parameter {
+		return newBlocksParameter().Properties["blocks"].Items
+	}
+
+	t.Run("strict mode rejects a union at the root", func(t *testing.T) {
+		_, err := openai.ConvertResponseSchemaToOpenAI(rootUnion(), true)
+		gt.True(t, errors.Is(err, gollem.ErrUnsupportedSchema))
+		gt.S(t, err.Error()).Contains("anyOf at the root cannot be sent in OpenAI strict mode")
+	})
+
+	t.Run("non-strict mode sends a union at the root", func(t *testing.T) {
+		format, err := openai.ConvertResponseSchemaToOpenAI(rootUnion(), false)
+		gt.NoError(t, err)
+		gt.S(t, string(format.Schema.(json.RawMessage))).HasPrefix(`{"anyOf":[`)
+	})
+}
+
+// blocksPrompt asks for a reply that uses both kinds of newBlocksParameter.
+const blocksPrompt = "Write a three-block note about tea: a paragraph, a warning callout, then a paragraph. Reply in JSON."
+
+// assertBlocksReply decodes a reply to newBlocksParameter and checks that each
+// block matches exactly one kind and carries only that kind's fields.
+func assertBlocksReply(t *testing.T, text string) {
+	t.Helper()
+	var reply struct {
+		Blocks []map[string]any `json:"blocks"`
+	}
+	gt.NoError(t, json.Unmarshal([]byte(text), &reply)).Required()
+	gt.A(t, reply.Blocks).Longer(0)
+
+	kinds := newBlocksParameter().Properties["blocks"].Items.AnyOf
+	seen := map[string]bool{}
+	for i, block := range reply.Blocks {
+		matched := 0
+		for _, kind := range kinds {
+			if kind.ValidateValue("block", block) != nil {
+				continue
+			}
+			matched++
+			for key := range block {
+				if _, ok := kind.Properties[key]; !ok {
+					t.Errorf("block %d has field %q that its kind does not define: %v", i, key, block)
+				}
+			}
+		}
+		if matched != 1 {
+			t.Errorf("block %d matches %d kinds, want 1: %v", i, matched, block)
+		}
+		kind, _ := block["kind"].(string)
+		seen[kind] = true
+	}
+	if !seen["paragraph"] || !seen["callout"] {
+		t.Errorf("reply must hold both a paragraph and a callout: %v", reply.Blocks)
+	}
+}
+
+func TestAnyOfResponseSchemaLive(t *testing.T) {
+	apiKey, ok := os.LookupEnv("TEST_OPENAI_API_KEY")
+	if !ok {
+		t.Skip("TEST_OPENAI_API_KEY is not set")
+	}
+
+	runTest := func(strict bool) func(t *testing.T) {
+		return func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*testTimeout)
+			defer cancel()
+
+			client, err := openai.New(ctx, apiKey)
+			gt.NoError(t, err).Required()
+			session, err := client.NewSession(ctx,
+				gollem.WithSessionContentType(gollem.ContentTypeJSON),
+				gollem.WithSessionResponseSchema(newBlocksParameter()))
+			gt.NoError(t, err).Required()
+			if strict {
+				openai.EnableStrictMode(session)
+			}
+
+			resp, err := session.Generate(ctx, []gollem.Input{gollem.Text(blocksPrompt)})
+			gt.NoError(t, err).Required()
+			gt.A(t, resp.Texts).Length(1).Required()
+			t.Logf("reply: %s", resp.Texts[0])
+			assertBlocksReply(t, resp.Texts[0])
+		}
+	}
+
+	t.Run("strict", runTest(true))
+	t.Run("non-strict", runTest(false))
+}
+
 var _ gollem.ModelNamer = (*openai.Client)(nil)
 
 // TestClientModel verifies that the client reports the model name it was

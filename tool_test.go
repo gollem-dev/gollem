@@ -796,3 +796,226 @@ func TestValidateValue(t *testing.T) {
 		})
 	})
 }
+
+// newBlockUnion returns a union of two object kinds told apart by a
+// single-value "kind" enum: a paragraph has text, a callout has text and color.
+func newBlockUnion() *gollem.Parameter {
+	return &gollem.Parameter{
+		Description: "a block of the body",
+		AnyOf: []*gollem.Parameter{
+			{
+				Type: gollem.TypeObject,
+				Properties: map[string]*gollem.Parameter{
+					"kind": {Type: gollem.TypeString, Enum: []string{"paragraph"}, Required: true},
+					"text": {Type: gollem.TypeString, Required: true},
+				},
+			},
+			{
+				Type: gollem.TypeObject,
+				Properties: map[string]*gollem.Parameter{
+					"kind":  {Type: gollem.TypeString, Enum: []string{"callout"}, Required: true},
+					"text":  {Type: gollem.TypeString, Required: true},
+					"color": {Type: gollem.TypeString, Enum: []string{"red", "blue"}, Required: true},
+				},
+			},
+		},
+	}
+}
+
+func TestParameterAnyOfValidation(t *testing.T) {
+	type testCase struct {
+		param    func() *gollem.Parameter
+		contains string
+	}
+
+	runTest := func(tc testCase) func(t *testing.T) {
+		return func(t *testing.T) {
+			err := tc.param().Validate()
+			if tc.contains == "" {
+				gt.NoError(t, err)
+				return
+			}
+			gt.True(t, errors.Is(err, gollem.ErrInvalidParameter))
+			gt.S(t, err.Error()).Contains(tc.contains)
+		}
+	}
+
+	t.Run("accepts two elements", runTest(testCase{
+		param: newBlockUnion,
+	}))
+
+	t.Run("accepts title, description, required and default", runTest(testCase{
+		param: func() *gollem.Parameter {
+			p := newBlockUnion()
+			p.Title = "block"
+			p.Required = true
+			p.Default = map[string]any{"kind": "paragraph", "text": ""}
+			return p
+		},
+	}))
+
+	t.Run("rejects type", runTest(testCase{
+		param: func() *gollem.Parameter {
+			p := newBlockUnion()
+			p.Type = gollem.TypeObject
+			return p
+		},
+		contains: "anyOf must not be combined with type",
+	}))
+
+	t.Run("rejects properties", runTest(testCase{
+		param: func() *gollem.Parameter {
+			p := newBlockUnion()
+			p.Properties = map[string]*gollem.Parameter{"kind": {Type: gollem.TypeString}}
+			return p
+		},
+		contains: "anyOf must not be combined with properties",
+	}))
+
+	t.Run("rejects every other typed field", runTest(testCase{
+		param: func() *gollem.Parameter {
+			p := newBlockUnion()
+			p.Items = &gollem.Parameter{Type: gollem.TypeString}
+			p.AdditionalProperties = &gollem.Parameter{Type: gollem.TypeString}
+			p.Enum = []string{"a"}
+			p.Minimum = ptr(1.0)
+			p.Maximum = ptr(2.0)
+			p.MinLength = ptr(1)
+			p.MaxLength = ptr(2)
+			p.Pattern = "^a$"
+			p.MinItems = ptr(1)
+			p.MaxItems = ptr(2)
+			return p
+		},
+		contains: "anyOf must not be combined with items, additionalProperties, enum, minimum, maximum, minLength, maxLength, pattern, minItems, maxItems",
+	}))
+
+	t.Run("rejects one element", runTest(testCase{
+		param: func() *gollem.Parameter {
+			return &gollem.Parameter{AnyOf: []*gollem.Parameter{{Type: gollem.TypeString}}}
+		},
+		contains: "anyOf needs at least two elements",
+	}))
+
+	t.Run("rejects an empty list", runTest(testCase{
+		param: func() *gollem.Parameter {
+			return &gollem.Parameter{AnyOf: []*gollem.Parameter{}}
+		},
+		contains: "anyOf needs at least two elements",
+	}))
+
+	t.Run("rejects a nil element", runTest(testCase{
+		param: func() *gollem.Parameter {
+			return &gollem.Parameter{AnyOf: []*gollem.Parameter{{Type: gollem.TypeString}, nil}}
+		},
+		contains: "anyOf[1] must not be nil",
+	}))
+
+	t.Run("rejects an invalid element and names its index", runTest(testCase{
+		param: func() *gollem.Parameter {
+			p := newBlockUnion()
+			p.AnyOf[1].Properties["color"].Type = ""
+			return p
+		},
+		contains: "invalid anyOf[1]",
+	}))
+
+	t.Run("reports the first invalid element in index order", runTest(testCase{
+		param: func() *gollem.Parameter {
+			return &gollem.Parameter{AnyOf: []*gollem.Parameter{
+				{Type: gollem.TypeString},
+				{Type: gollem.TypeArray},
+				{Type: gollem.TypeObject},
+			}}
+		},
+		contains: "invalid anyOf[1]",
+	}))
+
+	t.Run("a parameter without anyOf still needs a type", runTest(testCase{
+		param: func() *gollem.Parameter {
+			return &gollem.Parameter{Description: "no type"}
+		},
+		contains: "type is required",
+	}))
+
+	t.Run("a union inside array items is validated", runTest(testCase{
+		param: func() *gollem.Parameter {
+			items := newBlockUnion()
+			items.Type = gollem.TypeObject
+			return &gollem.Parameter{Type: gollem.TypeArray, Items: items}
+		},
+		contains: "invalid items",
+	}))
+}
+
+func TestValidateValueAnyOf(t *testing.T) {
+	t.Run("value matching the first element", func(t *testing.T) {
+		gt.NoError(t, newBlockUnion().ValidateValue("block",
+			map[string]any{"kind": "paragraph", "text": "hello"}))
+	})
+
+	t.Run("value matching the second element", func(t *testing.T) {
+		gt.NoError(t, newBlockUnion().ValidateValue("block",
+			map[string]any{"kind": "callout", "text": "hello", "color": "red"}))
+	})
+
+	t.Run("value matching neither element carries both failures", func(t *testing.T) {
+		err := newBlockUnion().ValidateValue("block",
+			map[string]any{"kind": "callout", "text": "hello"})
+		gt.True(t, errors.Is(err, gollem.ErrInvalidParameter))
+		gt.S(t, err.Error()).Contains("value matches none of anyOf")
+		gt.S(t, err.Error()).Contains(`anyOf[0]: value not in enum: invalid parameter at "block.kind"`)
+		gt.S(t, err.Error()).Contains(`anyOf[1]: required parameter missing: invalid parameter at "block.color"`)
+
+		values := goerr.Values(err)
+		gt.Equal(t, "block", values["parameter"])
+		gt.A(t, values["failures"].([]string)).Length(2)
+	})
+
+	t.Run("value of another type names no nested path", func(t *testing.T) {
+		err := newBlockUnion().ValidateValue("block", "text")
+		gt.S(t, err.Error()).Contains("anyOf[0]: expected object type: invalid parameter; anyOf[1]: expected object type: invalid parameter")
+	})
+
+	t.Run("nil without required is valid", func(t *testing.T) {
+		gt.NoError(t, newBlockUnion().ValidateValue("block", nil))
+	})
+
+	t.Run("nil with required is missing", func(t *testing.T) {
+		p := newBlockUnion()
+		p.Required = true
+		err := p.ValidateValue("block", nil)
+		gt.True(t, errors.Is(err, gollem.ErrInvalidParameter))
+		gt.S(t, err.Error()).Contains("required parameter missing")
+	})
+
+	t.Run("union inside array items", func(t *testing.T) {
+		p := &gollem.Parameter{Type: gollem.TypeArray, Items: newBlockUnion()}
+		gt.NoError(t, p.ValidateValue("blocks", []any{
+			map[string]any{"kind": "paragraph", "text": "a"},
+			map[string]any{"kind": "callout", "text": "b", "color": "blue"},
+		}))
+
+		err := p.ValidateValue("blocks", []any{
+			map[string]any{"kind": "paragraph", "text": "a"},
+			map[string]any{"kind": "paragraph", "text": "b", "color": "blue"},
+			map[string]any{"kind": "heading", "text": "c"},
+		})
+		gt.True(t, errors.Is(err, gollem.ErrInvalidParameter))
+		gt.Equal(t, "blocks[2]", goerr.Values(err)["parameter"])
+	})
+
+	t.Run("tool arguments are validated against the union", func(t *testing.T) {
+		spec := gollem.ToolSpec{
+			Name:       "write",
+			Parameters: map[string]*gollem.Parameter{"block": newBlockUnion()},
+		}
+		gt.NoError(t, spec.Validate())
+		gt.NoError(t, spec.ValidateArgs(map[string]any{
+			"block": map[string]any{"kind": "paragraph", "text": "a"},
+		}))
+		err := spec.ValidateArgs(map[string]any{"block": map[string]any{"kind": "heading"}})
+		gt.True(t, errors.Is(err, gollem.ErrToolArgsValidation))
+		gt.S(t, err.Error()).Contains("value matches none of anyOf")
+	})
+}

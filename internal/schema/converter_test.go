@@ -206,6 +206,122 @@ func TestFindAdditionalProperties(t *testing.T) {
 	})
 }
 
+// newBlocksParameter returns an object whose "blocks" array holds a union of
+// two object kinds told apart by a single-value "kind" enum.
+func newBlocksParameter() *gollem.Parameter {
+	return &gollem.Parameter{
+		Type: gollem.TypeObject,
+		Properties: map[string]*gollem.Parameter{
+			"blocks": {
+				Type:     gollem.TypeArray,
+				Required: true,
+				Items: &gollem.Parameter{
+					Description: "a block",
+					AnyOf: []*gollem.Parameter{
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"paragraph"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+							},
+						},
+						{
+							Type: gollem.TypeObject,
+							Properties: map[string]*gollem.Parameter{
+								"kind": {Type: gollem.TypeString, Enum: []string{"callout"}, Required: true},
+								"text": {Type: gollem.TypeString, Required: true},
+								"tone": {Type: gollem.TypeString, Enum: []string{"info", "warning"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestConvertParameterToJSONSchemaAnyOf(t *testing.T) {
+	const expected = `{"additionalProperties":false,"properties":{"blocks":{"items":{"anyOf":[` +
+		`{"additionalProperties":false,"properties":{"kind":{"enum":["paragraph"],"type":"string"},"text":{"type":"string"}},"required":["kind","text"],"type":"object"},` +
+		`{"additionalProperties":false,"properties":{"kind":{"enum":["callout"],"type":"string"},"text":{"type":"string"},"tone":{"enum":["info","warning"],"type":"string"}},"required":["kind","text"],"type":"object"}` +
+		`],"description":"a block"},"type":"array"}},"required":["blocks"],"type":"object"}`
+
+	param := newBlocksParameter()
+	for range 20 {
+		out, err := json.Marshal(schema.ConvertParameterToJSONSchema(param))
+		gt.NoError(t, err)
+		gt.Equal(t, expected, string(out))
+	}
+}
+
+func TestConvertParameterToJSONStringAnyOfAtRoot(t *testing.T) {
+	param := newBlocksParameter().Properties["blocks"].Items
+	out, err := schema.ConvertParameterToJSONString(param)
+	gt.NoError(t, err)
+
+	var decoded map[string]any
+	gt.NoError(t, json.Unmarshal([]byte(out), &decoded))
+	_, hasType := decoded["type"]
+	gt.False(t, hasType)
+	gt.A(t, decoded["anyOf"].([]any)).Length(2)
+	gt.Equal(t, "a block", decoded["description"])
+}
+
+func TestFindAdditionalPropertiesInAnyOf(t *testing.T) {
+	t.Run("map in a union element", func(t *testing.T) {
+		param := newBlocksParameter()
+		param.Properties["blocks"].Items.AnyOf[1].Properties["attrs"] = newMapParameter(gollem.TypeString)
+		path, found := schema.FindAdditionalProperties(param)
+		gt.True(t, found)
+		gt.Equal(t, "blocks[].anyOf[1].attrs", path)
+	})
+
+	t.Run("map as a union element at the root", func(t *testing.T) {
+		param := &gollem.Parameter{AnyOf: []*gollem.Parameter{
+			{Type: gollem.TypeString},
+			newMapParameter(gollem.TypeString),
+		}}
+		path, found := schema.FindAdditionalProperties(param)
+		gt.True(t, found)
+		gt.Equal(t, "(root).anyOf[1]", path)
+	})
+
+	t.Run("union without a map", func(t *testing.T) {
+		_, found := schema.FindAdditionalProperties(newBlocksParameter())
+		gt.False(t, found)
+	})
+}
+
+func TestCountAnyOf(t *testing.T) {
+	t.Run("no union", func(t *testing.T) {
+		gt.Equal(t, 0, schema.CountAnyOf(newMultiRequiredParameter()))
+	})
+
+	t.Run("union inside array items", func(t *testing.T) {
+		gt.Equal(t, 1, schema.CountAnyOf(newBlocksParameter()))
+	})
+
+	t.Run("unions at the root, in properties, in map values and inside elements", func(t *testing.T) {
+		union := func() *gollem.Parameter {
+			return &gollem.Parameter{AnyOf: []*gollem.Parameter{
+				{Type: gollem.TypeString},
+				{Type: gollem.TypeInteger},
+			}}
+		}
+		param := &gollem.Parameter{AnyOf: []*gollem.Parameter{
+			{
+				Type: gollem.TypeObject,
+				Properties: map[string]*gollem.Parameter{
+					"a": union(),
+					"b": {Type: gollem.TypeObject, AdditionalProperties: union()},
+				},
+			},
+			union(),
+		}}
+		gt.Equal(t, 4, schema.CountAnyOf(param))
+	})
+}
+
 func TestConvertParameterToJSONSchemaMap(t *testing.T) {
 	t.Run("map object has a value schema and no properties", func(t *testing.T) {
 		out, err := json.Marshal(schema.ConvertParameterToJSONSchema(newMapParameter(gollem.TypeString)))

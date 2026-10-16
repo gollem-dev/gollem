@@ -167,6 +167,8 @@ resp, _ := gollem.SessionQuery[UserProfile](ctx, session, "Who am I?")
 // The session's history (including this exchange) is preserved
 ```
 
+Besides objects, arrays and enums, a schema can declare a map (`Parameter.AdditionalProperties`, [details](docs/schema.md#maps)) and a union of several shapes (`Parameter.AnyOf`, sent as JSON Schema `anyOf`, [details](docs/schema.md#unions)). Some providers reject a map or a union in some ways of sending a schema; gollem returns `gollem.ErrUnsupportedSchema` before calling the API in those cases.
+
 Each provider receives the schema through its own schema parameter. For Claude models that support structured outputs, the schema is sent as `output_config.format`, and the system prompt and tool list are the same as in a call without a schema; older Claude models receive the schema in the system prompt ([details](docs/schema.md#claude)). After a tool loop, `WithToolCallsDisabled()` keeps the tools in the request but forbids calling them, so a structured answer can be requested over the same history:
 
 ```go

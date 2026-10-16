@@ -1178,6 +1178,14 @@ func convertResponseSchemaToOpenAI(param *gollem.Parameter, strict bool) (*opena
 				fmt.Sprintf("map at %q cannot be sent in OpenAI strict mode, which requires additionalProperties to be false", path),
 				goerr.V("path", path))
 		}
+		// "The root level object of a schema must be an object, and not use
+		// anyOf." (Supported schemas,
+		// https://developers.openai.com/api/docs/guides/structured-outputs ).
+		// A union below the root is accepted.
+		if len(param.AnyOf) > 0 {
+			return nil, goerr.Wrap(gollem.ErrUnsupportedSchema,
+				"anyOf at the root cannot be sent in OpenAI strict mode, which requires the root to be an object")
+		}
 	}
 
 	// Convert Parameter to JSON Schema format
@@ -1212,6 +1220,21 @@ func convertParameterToJSONSchemaWithStrict(param *gollem.Parameter, strict bool
 	// For non-strict mode, use the shared conversion function
 	if !strict {
 		return schema.ConvertParameterToJSONSchema(param)
+	}
+
+	// Each element of a union must itself be a valid strict schema, so it is
+	// converted by this function: an object element gets every property in
+	// required and additionalProperties false.
+	if len(param.AnyOf) > 0 {
+		result := map[string]any{
+			"anyOf": schema.ConvertAnyOf(param.AnyOf, func(alt *gollem.Parameter) map[string]any {
+				return convertParameterToJSONSchemaWithStrict(alt, strict)
+			}),
+		}
+		if param.Description != "" {
+			result["description"] = param.Description
+		}
+		return result
 	}
 
 	// Strict mode: OpenAI-specific handling

@@ -1407,6 +1407,67 @@ func TestMapInResponseSchema(t *testing.T) {
 	t.Run("system prompt keeps a session map: Vertex Stream", runTest(testCase{path: vertexStream}))
 }
 
+// blocksPrompt asks for a reply that uses both kinds of newBlocksParameter.
+const blocksPrompt = "Write a three-block note about tea: a paragraph, a warning callout, then a paragraph. Reply in JSON."
+
+// assertBlocksReply decodes a reply to newBlocksParameter and checks that each
+// block matches exactly one kind and carries only that kind's fields.
+func assertBlocksReply(t *testing.T, text string) {
+	t.Helper()
+	var reply struct {
+		Blocks []map[string]any `json:"blocks"`
+	}
+	gt.NoError(t, json.Unmarshal([]byte(text), &reply)).Required()
+	gt.A(t, reply.Blocks).Longer(0)
+
+	kinds := newBlocksParameter().Properties["blocks"].Items.AnyOf
+	seen := map[string]bool{}
+	for i, block := range reply.Blocks {
+		matched := 0
+		for _, kind := range kinds {
+			if kind.ValidateValue("block", block) != nil {
+				continue
+			}
+			matched++
+			for key := range block {
+				if _, ok := kind.Properties[key]; !ok {
+					t.Errorf("block %d has field %q that its kind does not define: %v", i, key, block)
+				}
+			}
+		}
+		if matched != 1 {
+			t.Errorf("block %d matches %d kinds, want 1: %v", i, matched, block)
+		}
+		kind, _ := block["kind"].(string)
+		seen[kind] = true
+	}
+	if !seen["paragraph"] || !seen["callout"] {
+		t.Errorf("reply must hold both a paragraph and a callout: %v", reply.Blocks)
+	}
+}
+
+func TestAnyOfResponseSchemaLive(t *testing.T) {
+	apiKey, ok := os.LookupEnv("TEST_CLAUDE_API_KEY")
+	if !ok {
+		t.Skip("TEST_CLAUDE_API_KEY is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	client, err := claude.New(ctx, apiKey)
+	gt.NoError(t, err).Required()
+	session, err := client.NewSession(ctx)
+	gt.NoError(t, err).Required()
+
+	resp, err := session.Generate(ctx, []gollem.Input{gollem.Text(blocksPrompt)},
+		gollem.WithGenerateResponseSchema(newBlocksParameter()), gollem.WithMaxTokens(maxTestTokens))
+	gt.NoError(t, err).Required()
+	gt.A(t, resp.Texts).Length(1).Required()
+	t.Logf("reply: %s", resp.Texts[0])
+	assertBlocksReply(t, resp.Texts[0])
+}
+
 func TestJSONIsExtractedHoweverTheSchemaIsSent(t *testing.T) {
 	// JSON extraction re-marshals the value, which sorts keys and drops
 	// whitespace, so the compact form shows that extraction took place.

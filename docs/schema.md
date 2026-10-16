@@ -267,9 +267,64 @@ gollem supports the following JSON Schema types:
 		Type: gollem.TypeInteger,
 	},
 }
+
+// Union (the value matches at least one of the schemas), sent as "anyOf"
+&gollem.Parameter{
+	AnyOf: []*gollem.Parameter{
+		{Type: gollem.TypeString},
+		{Type: gollem.TypeInteger},
+	},
+}
 ```
 
-Not every way of sending a schema accepts a map; see [Maps](#maps).
+Not every way of sending a schema accepts a map; see [Maps](#maps). A union has limits of its own; see [Unions](#unions).
+
+### Unions
+
+`AnyOf` declares a value that may take one of several shapes. A typical use is an array whose items are objects of different kinds: each kind is its own object schema, and a property with a single-value `Enum` (here `kind`) tells them apart. Under Claude structured outputs or OpenAI strict mode, the model then cannot set a field on a kind that does not define it, which a single object carrying every kind's fields cannot prevent.
+
+```go
+blocks := &gollem.Parameter{
+	Type: gollem.TypeArray,
+	Items: &gollem.Parameter{
+		Description: "A block of the document body",
+		AnyOf: []*gollem.Parameter{
+			{
+				Type: gollem.TypeObject,
+				Properties: map[string]*gollem.Parameter{
+					"kind": {Type: gollem.TypeString, Enum: []string{"paragraph"}, Required: true},
+					"text": {Type: gollem.TypeString, Required: true},
+				},
+			},
+			{
+				Type: gollem.TypeObject,
+				Properties: map[string]*gollem.Parameter{
+					"kind": {Type: gollem.TypeString, Enum: []string{"callout"}, Required: true},
+					"text": {Type: gollem.TypeString, Required: true},
+					"tone": {Type: gollem.TypeString, Enum: []string{"info", "warning"}, Required: true},
+				},
+			},
+		},
+	},
+}
+```
+
+- A parameter with `AnyOf` has no type of its own. `Type`, `Properties`, `Items`, `AdditionalProperties`, `Enum` and the constraints must be empty; only `Title`, `Description`, `Required` and `Default` may be set. `AnyOf` needs at least two elements. `Parameter.Validate` returns `gollem.ErrInvalidParameter` otherwise, and the message names the index of an invalid element, for example `invalid anyOf[1]`.
+- A value is valid when it matches at least one element. When it matches none, `Parameter.ValidateValue` returns `gollem.ErrInvalidParameter` whose message lists each element's failure, for example `anyOf[0]: value not in enum: invalid parameter at "block.kind"`. Tool argument validation returns this message to the model.
+- gollem sends the properties of an object in ascending name order, and constrained decoding (Claude structured outputs, OpenAI strict mode) writes them in that order; Claude writes the required properties first. Name the property that tells the kinds apart so that it comes first among the required properties of every kind, as `kind` does above. If another required property sorts before it, for example `color`, the model writes `"kind"` first only for the kinds where `kind` is the first property, and cannot choose the other kinds. With OpenAI strict mode, a `color` property in the callout kind above made the model return only paragraphs.
+- `ToSchema` does not produce `AnyOf`, because a Go struct cannot declare a union. Build the schema by hand, and decode the reply yourself, for example into a struct that holds every kind's fields and switches on `kind`.
+
+| Where the schema is sent | Union |
+|---|---|
+| Tool definitions (Claude, OpenAI, Gemini, Ollama) | Sent |
+| Response schema, Ollama | Sent (as `format`) |
+| Response schema, OpenAI without strict mode (the default) | Sent |
+| Response schema, Gemini | Sent (in `genai.Schema.AnyOf`) |
+| Response schema, Claude without structured outputs (schema in the system prompt) | Sent |
+| Response schema, Claude structured outputs | Sent; more than 16 parameters with `AnyOf` are rejected with `gollem.ErrUnsupportedSchema` |
+| Response schema, OpenAI strict mode | Sent below the root; `AnyOf` on the root is rejected with `gollem.ErrUnsupportedSchema` |
+
+Claude structured outputs accepts at most 16 parameters that use `anyOf` in a request ("Parameters with union types" in the [structured outputs limits](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)), so gollem counts them and rejects a larger schema before calling the API. OpenAI strict mode requires the root of the schema to be an object that does not use `anyOf`. In both, each object element is sent with `additionalProperties: false`, and in OpenAI strict mode every property of an object element is listed in `required`, as for any other object.
 
 ## Advanced Examples
 
@@ -550,7 +605,7 @@ schema := &gollem.Parameter{
 
 OpenAI uses Structured Outputs with JSON Schema:
 - Supports all JSON Schema features
-- gollem sends response schemas with `strict: false` by default. Strict mode requires `additionalProperties: false` on every object, so a schema with a map is rejected in strict mode (see [Maps](#maps)).
+- gollem sends response schemas with `strict: false` by default. Strict mode requires `additionalProperties: false` on every object, so a schema with a map is rejected in strict mode (see [Maps](#maps)). Strict mode also rejects `AnyOf` on the root of the schema (see [Unions](#unions)).
 - Compatible with GPT-4o and later models
 
 ### Claude
@@ -558,7 +613,7 @@ OpenAI uses Structured Outputs with JSON Schema:
 On models that support [structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs), Claude receives the schema as `output_config.format`:
 - The API constrains decoding to the schema, so the response text is JSON that matches it. The documented exceptions are a refusal (`stop_reason: "refusal"`), a response cut off by `max_tokens`, and a string `enum` value returned with different capitalization, which the Claude documentation avoids by using lowercase enum values. As with other models, gollem extracts the JSON from the response text whenever the content type is JSON.
 - gollem does not change the system prompt on these models, with or without a schema. With `ContentTypeJSON` and no schema, nothing is added, so ask for JSON in your own prompt. The system prompt and tool list are therefore the same as in a call without a schema; Claude accepts thinking blocks from earlier turns only while both stay the same, so a call with a schema can follow a tool loop over the same history.
-- Structured outputs rejects some JSON Schema keywords. gollem removes `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `maxItems` and a `minItems` above 1 from the schema and appends them to the field's description, for example `{maxLength: 20}`. The API does not enforce these constraints, and gollem does not validate the response against them. Every object is sent with `additionalProperties: false`.
+- Structured outputs rejects some JSON Schema keywords. gollem removes `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `maxItems` and a `minItems` above 1 from the schema and appends them to the field's description, for example `{maxLength: 20}`. The API does not enforce these constraints, and gollem does not validate the response against them. Every object is sent with `additionalProperties: false`. A schema with more than 16 parameters that use `AnyOf` is rejected with `gollem.ErrUnsupportedSchema` (see [Unions](#unions)).
 - Models that do not support structured outputs (Claude Sonnet 4, Claude Opus 4 and the Claude 3 and Claude 2 models) behave as in earlier gollem versions: a JSON instruction and the schema are appended to the system prompt. The list is `structuredOutputsUnsupported` in `llm/claude/model.go`; any other model ID, including one served through `WithBaseURL`, is sent `output_config.format`.
 - On Vertex AI, a Google Cloud organization policy can forbid structured outputs (`constraints/vertexai.allowedPartnerModelFeatures` without `structured_outputs` for the model), and Vertex AI then rejects the call with a 400. Create the client with `claude.WithVertexStructuredOutputsDisabled()` to send every model the schema in the system prompt instead. The system prompt then changes with the schema, so a history containing thinking blocks produced under another system prompt is rejected.
 

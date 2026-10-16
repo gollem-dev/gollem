@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 
@@ -28,8 +29,9 @@ func CollectRequiredFields(properties map[string]*gollem.Parameter) []string {
 // FindAdditionalProperties returns the path of the first object that has
 // AdditionalProperties (a map), visiting properties in ascending name order so
 // that the result does not depend on map iteration. The path joins property
-// names with "." and marks array items with "[]", e.g. "items[].attrs"; the
-// root itself is reported as "(root)".
+// names with "." and marks array items with "[]" and union elements with
+// ".anyOf[i]", e.g. "items[].attrs" or "blocks[].anyOf[1].attrs"; the root
+// itself is reported as "(root)".
 //
 // Providers use it to decide how to send a schema: Claude structured outputs
 // and OpenAI strict mode reject a schema that contains a map, and Gemini sends
@@ -62,14 +64,72 @@ func findAdditionalProperties(param *gollem.Parameter, path string) (string, boo
 		if path == "" {
 			itemsPath = "(root)[]"
 		}
-		return findAdditionalProperties(param.Items, itemsPath)
+		if found, ok := findAdditionalProperties(param.Items, itemsPath); ok {
+			return found, true
+		}
+	}
+	for i, alt := range param.AnyOf {
+		base := path
+		if base == "" {
+			base = "(root)"
+		}
+		if found, ok := findAdditionalProperties(alt, fmt.Sprintf("%s.anyOf[%d]", base, i)); ok {
+			return found, true
+		}
 	}
 	return "", false
+}
+
+// CountAnyOf returns the number of parameters in the schema that have AnyOf,
+// counting the root, every property, array items, map values and union
+// elements at any depth.
+//
+// Claude structured outputs limits the number of such parameters per request,
+// so the Claude client counts them before sending a schema.
+func CountAnyOf(param *gollem.Parameter) int {
+	if param == nil {
+		return 0
+	}
+	count := 0
+	if len(param.AnyOf) > 0 {
+		count++
+	}
+	for _, prop := range param.Properties {
+		count += CountAnyOf(prop)
+	}
+	count += CountAnyOf(param.Items)
+	count += CountAnyOf(param.AdditionalProperties)
+	for _, alt := range param.AnyOf {
+		count += CountAnyOf(alt)
+	}
+	return count
+}
+
+// ConvertAnyOf converts each element of a union with convert, keeping the
+// element order, so that every provider emits "anyOf" with the converter it
+// uses for any other parameter.
+func ConvertAnyOf[T any](alts []*gollem.Parameter, convert func(*gollem.Parameter) T) []T {
+	converted := make([]T, len(alts))
+	for i, alt := range alts {
+		converted[i] = convert(alt)
+	}
+	return converted
 }
 
 // ConvertParameterToJSONSchema converts gollem.Parameter to JSON Schema map
 // This is the base conversion without provider-specific modifications
 func ConvertParameterToJSONSchema(param *gollem.Parameter) map[string]any {
+	// A union has no type of its own; each element carries its type.
+	if len(param.AnyOf) > 0 {
+		schema := map[string]any{
+			"anyOf": ConvertAnyOf(param.AnyOf, ConvertParameterToJSONSchema),
+		}
+		if param.Description != "" {
+			schema["description"] = param.Description
+		}
+		return schema
+	}
+
 	schema := map[string]any{
 		"type": string(param.Type),
 	}
@@ -144,23 +204,10 @@ func ConvertParameterToJSONString(param *gollem.Parameter) (string, error) {
 		return "", goerr.Wrap(err, "invalid response schema")
 	}
 
-	// Build JSON Schema object
-	schemaObj := map[string]any{
-		"type":    "object",
-		"$schema": "http://json-schema.org/draft-07/schema#",
-	}
-
-	if param.Description != "" {
-		schemaObj["description"] = param.Description
-	}
-
-	// Convert Parameter to JSON Schema
-	innerSchema := ConvertParameterToJSONSchema(param)
-
-	// Merge properties from inner schema
-	for k, v := range innerSchema {
-		schemaObj[k] = v
-	}
+	// The type and description come from the converted parameter, so a union
+	// at the root is written with "anyOf" and no "type".
+	schemaObj := ConvertParameterToJSONSchema(param)
+	schemaObj["$schema"] = "http://json-schema.org/draft-07/schema#"
 
 	// Marshal to pretty JSON. HTML escaping is disabled because this string is embedded
 	// verbatim into the system prompt: with it on, a description containing "<", ">" or "&"
