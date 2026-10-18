@@ -114,7 +114,7 @@ func WithVertexSystemPrompt(prompt string) VertexOption {
 
 // WithVertexStructuredOutputsDisabled stops sending response schemas as
 // structured outputs (output_config.format), so that every model receives them
-// in the system prompt instead.
+// in an instruction message instead.
 //
 // Use it when the Google Cloud project's organization policy
 // (constraints/vertexai.allowedPartnerModelFeatures) does not allow the
@@ -139,13 +139,17 @@ func WithVertexSystemPrompt(prompt string) VertexOption {
 //
 // With this option, and on models without structured outputs (Claude Sonnet 4,
 // Claude Opus 4, Claude 3 and Claude 2) regardless of it:
-//   - No output_config.format is sent.
-//   - With ContentTypeJSON, "Please format your response as valid JSON." is
-//     appended to the first system prompt block, followed by the session schema
-//     as JSON text when one is set.
-//   - A per-call schema appends the same instruction and that schema once more.
-//     A ContentTypeJSON session with its own schema therefore carries both
-//     schemas in one call.
+//   - No output_config.format is sent, and the system prompt is sent exactly
+//     as configured.
+//   - A call whose content type in effect is JSON gets an instruction message:
+//     a user message, after the messages built from the call's inputs, holding
+//     only "Format only your next response as valid JSON. This instruction does
+//     not apply to any later response." followed by the schema in effect as
+//     JSON text when there is one. It is added on every such call, including
+//     one whose input is only tool results.
+//   - The instruction message is stored in the history and sent unchanged on
+//     later calls. A tool loop in a ContentTypeJSON session therefore stores
+//     one copy of the schema per call.
 //
 // In every case the JSON is extracted from the response text when the content
 // type in effect is JSON (ContentTypeJSON, or any call with a per-call schema).
@@ -153,13 +157,10 @@ func WithVertexSystemPrompt(prompt string) VertexOption {
 // # Effect on thinking blocks
 //
 // Claude accepts thinking blocks from earlier turns only while the system
-// prompt and tool list are the ones they were produced with. With this option
-// the system prompt of a call with a schema differs from that of a call
-// without one, so a history containing thinking blocks from a call without a
-// schema is rejected with a 400 by the call that adds one, on models that bind
-// thinking blocks this way such as claude-opus-5-5. Without this option,
-// on models that support structured outputs, the system prompt stays the same
-// and such a history is accepted.
+// prompt, the tool list and the messages before them are the ones they were
+// produced with. With or without this option, a call with a schema leaves the
+// system prompt and tool list unchanged and only appends messages, so a
+// history containing thinking blocks is accepted by a call that adds a schema.
 func WithVertexStructuredOutputsDisabled() VertexOption {
 	return func(c *VertexClient) {
 		c.structuredOutputs = false
@@ -310,10 +311,6 @@ func (s *VertexAnthropicSession) Generate(ctx context.Context, input []gollem.In
 		return nil, err
 	}
 
-	// Create a copy of messages for the API call, but don't update session history yet
-	apiMessages := append([]anthropic.MessageParam{}, s.messages...)
-	apiMessages = append(apiMessages, messages...)
-
 	// Convert gollem tools to anthropic tools
 	var tools []anthropic.ToolUnionParam
 	if len(s.cfg.Tools()) > 0 {
@@ -323,7 +320,8 @@ func (s *VertexAnthropicSession) Generate(ctx context.Context, input []gollem.In
 		}
 	}
 
-	msgParams, err := buildMessageParams(ctx, s.defaultModel, s.params, apiMessages, tools, s.cfg, s.structuredOutputs, opts...)
+	// The session history is updated only after the API call succeeds.
+	msgParams, messages, err := buildMessageParams(s.defaultModel, s.params, s.messages, messages, tools, s.cfg, s.structuredOutputs, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -367,9 +365,6 @@ func (s *VertexAnthropicSession) Stream(ctx context.Context, input []gollem.Inpu
 		return nil, err
 	}
 
-	apiMessages := append([]anthropic.MessageParam{}, s.messages...)
-	apiMessages = append(apiMessages, messages...)
-
 	// Convert gollem tools to anthropic tools
 	var tools []anthropic.ToolUnionParam
 	if len(s.cfg.Tools()) > 0 {
@@ -379,7 +374,7 @@ func (s *VertexAnthropicSession) Stream(ctx context.Context, input []gollem.Inpu
 		}
 	}
 
-	msgParams, err := buildMessageParams(ctx, s.defaultModel, s.params, apiMessages, tools, s.cfg, s.structuredOutputs, opts...)
+	msgParams, messages, err := buildMessageParams(s.defaultModel, s.params, s.messages, messages, tools, s.cfg, s.structuredOutputs, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -23,8 +23,8 @@ import (
 // this way and is rejected with gollem.ErrUnsupportedSchema before the request
 // is sent. See https://platform.claude.com/docs/en/build-with-claude/structured-outputs
 // To send such a schema, use a configuration without structured outputs (e.g.
-// WithVertexStructuredOutputsDisabled), in which the schema is written into
-// the system prompt.
+// WithVertexStructuredOutputsDisabled), in which the schema is sent in an
+// instruction message.
 //
 // The same page limits "Parameters with union types" to 16: the total number of
 // parameters that use anyOf or type arrays across all strict schemas of a

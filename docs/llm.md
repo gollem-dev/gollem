@@ -350,7 +350,7 @@ client, err := claude.NewWithVertex(ctx, region, projectID,
 
 #### Structured Outputs
 
-By default, a response schema is sent as structured outputs (`output_config.format`) to models that support it. If your Google Cloud organization policy does not allow the `structured_outputs` feature for the model, Vertex AI rejects those calls with a 400 naming `constraints/vertexai.allowedPartnerModelFeatures`. Either have an administrator add `publishers/anthropic/models/<model>:structured_outputs` to the policy's allowed values, or disable structured outputs so that the schema is written into the system prompt instead:
+By default, a response schema is sent as structured outputs (`output_config.format`) to models that support it. If your Google Cloud organization policy does not allow the `structured_outputs` feature for the model, Vertex AI rejects those calls with a 400 naming `constraints/vertexai.allowedPartnerModelFeatures`. Either have an administrator add `publishers/anthropic/models/<model>:structured_outputs` to the policy's allowed values, or disable structured outputs so that the schema is sent in a user message instead:
 
 ```go
 client, err := claude.NewWithVertex(ctx, region, projectID,
@@ -358,7 +358,7 @@ client, err := claude.NewWithVertex(ctx, region, projectID,
 )
 ```
 
-With structured outputs disabled, the system prompt changes with the schema, so Claude rejects a history whose thinking blocks were produced under a different system prompt. See [Provider-Specific Behavior](schema.md#claude).
+With structured outputs disabled, the system prompt and tool list stay the same with or without a schema, and the schema message is kept in the history. See [Provider-Specific Behavior](schema.md#claude).
 
 #### Issuer Scope
 

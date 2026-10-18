@@ -320,7 +320,7 @@ blocks := &gollem.Parameter{
 | Response schema, Ollama | Sent (as `format`) |
 | Response schema, OpenAI without strict mode (the default) | Sent |
 | Response schema, Gemini | Sent (in `genai.Schema.AnyOf`) |
-| Response schema, Claude without structured outputs (schema in the system prompt) | Sent |
+| Response schema, Claude without structured outputs (schema in an instruction message) | Sent |
 | Response schema, Claude structured outputs | Sent; more than 16 parameters with `AnyOf` are rejected with `gollem.ErrUnsupportedSchema` |
 | Response schema, OpenAI strict mode | Sent below the root; `AnyOf` on the root is rejected with `gollem.ErrUnsupportedSchema` |
 
@@ -529,7 +529,7 @@ A map can be sent to an LLM in some ways but not in others:
 | Response schema, Ollama | Sent (as `format`) |
 | Response schema, OpenAI without strict mode (the default) | Sent |
 | Response schema, Gemini | Sent (as `responseJsonSchema`) |
-| Response schema, Claude models or configurations without structured outputs (schema in the system prompt) | Sent |
+| Response schema, Claude models or configurations without structured outputs (schema in an instruction message) | Sent |
 | Response schema, Claude structured outputs | Rejected with `gollem.ErrUnsupportedSchema` |
 | Response schema, OpenAI strict mode | Rejected with `gollem.ErrUnsupportedSchema` |
 
@@ -614,8 +614,12 @@ On models that support [structured outputs](https://platform.claude.com/docs/en/
 - The API constrains decoding to the schema, so the response text is JSON that matches it. The documented exceptions are a refusal (`stop_reason: "refusal"`), a response cut off by `max_tokens`, and a string `enum` value returned with different capitalization, which the Claude documentation avoids by using lowercase enum values. As with other models, gollem extracts the JSON from the response text whenever the content type is JSON.
 - gollem does not change the system prompt on these models, with or without a schema. With `ContentTypeJSON` and no schema, nothing is added, so ask for JSON in your own prompt. The system prompt and tool list are therefore the same as in a call without a schema; Claude accepts thinking blocks from earlier turns only while both stay the same, so a call with a schema can follow a tool loop over the same history.
 - Structured outputs rejects some JSON Schema keywords. gollem removes `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`, `maxItems` and a `minItems` above 1 from the schema and appends them to the field's description, for example `{maxLength: 20}`. The API does not enforce these constraints, and gollem does not validate the response against them. Every object is sent with `additionalProperties: false`. A schema with more than 16 parameters that use `AnyOf` is rejected with `gollem.ErrUnsupportedSchema` (see [Unions](#unions)).
-- Models that do not support structured outputs (Claude Sonnet 4, Claude Opus 4 and the Claude 3 and Claude 2 models) behave as in earlier gollem versions: a JSON instruction and the schema are appended to the system prompt. The list is `structuredOutputsUnsupported` in `llm/claude/model.go`; any other model ID, including one served through `WithBaseURL`, is sent `output_config.format`.
-- On Vertex AI, a Google Cloud organization policy can forbid structured outputs (`constraints/vertexai.allowedPartnerModelFeatures` without `structured_outputs` for the model), and Vertex AI then rejects the call with a 400. Create the client with `claude.WithVertexStructuredOutputsDisabled()` to send every model the schema in the system prompt instead. The system prompt then changes with the schema, so a history containing thinking blocks produced under another system prompt is rejected.
+- Models that do not support structured outputs (Claude Sonnet 4, Claude Opus 4 and the Claude 3 and Claude 2 models) receive the schema in an instruction message: a user message added after the messages built from the call's input. It holds only `Format only your next response as valid JSON. This instruction does not apply to any later response.`, followed by the schema in effect as JSON text when there is one. The list is `structuredOutputsUnsupported` in `llm/claude/model.go`; any other model ID, including one served through `WithBaseURL`, is sent `output_config.format`.
+  - The system prompt is sent as configured, and the messages built from your input are sent unchanged.
+  - The instruction message names only the schema in effect: the per-call schema if one is given, otherwise the session schema.
+  - It is added to every call whose content type in effect is JSON, including a call whose input is only tool results, and it is not added to a call that asks for text.
+  - It is stored in the history and sent unchanged on later calls, because removing it would change an earlier turn, which invalidates the prompt cache and later thinking blocks. A tool loop in a `ContentTypeJSON` session therefore stores one copy of the schema per call.
+- On Vertex AI, a Google Cloud organization policy can forbid structured outputs (`constraints/vertexai.allowedPartnerModelFeatures` without `structured_outputs` for the model), and Vertex AI then rejects the call with a 400. Create the client with `claude.WithVertexStructuredOutputsDisabled()` to send every model the schema in an instruction message instead, as described above.
 
 ### Gemini
 
