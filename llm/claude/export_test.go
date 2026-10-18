@@ -70,7 +70,17 @@ func NewSessionWithAPIClient(client apiClient, cfg gollem.SessionConfig, model s
 			MaxTokens:   resolveMaxOutputTokens(model),
 		},
 		cfg: cfg,
+
+		structuredOutputs: true,
 	}, nil
+}
+
+// DisableStructuredOutputs makes a Claude API session send response schemas
+// as instruction messages, as a Vertex AI session created with
+// WithVertexStructuredOutputsDisabled does, so that tests can exercise that
+// path on the Claude API with models that support structured outputs.
+func DisableStructuredOutputs(session gollem.Session) {
+	session.(*Session).structuredOutputs = false
 }
 
 // GetBaseURL returns the base URL from a Claude client for testing

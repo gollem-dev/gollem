@@ -309,6 +309,12 @@ type Session struct {
 	params generationParameters
 
 	cfg gollem.SessionConfig
+
+	// structuredOutputs allows sending response schemas as
+	// output_config.format. The Claude API client always allows it; tests
+	// turn it off to send schemas as instruction messages to models that
+	// support structured outputs.
+	structuredOutputs bool
 }
 
 // Model returns the model name this client generates through. It is the name
@@ -347,6 +353,8 @@ func (c *Client) NewSession(ctx context.Context, options ...gollem.SessionOption
 		historyMessages: historyMessages,
 		issuer:          issuer,
 		cfg:             cfg,
+
+		structuredOutputs: true,
 	}
 
 	return session, nil
@@ -1105,7 +1113,7 @@ func (s *Session) Generate(ctx context.Context, input []gollem.Input, opts ...go
 			return nil, err
 		}
 
-		request, messages, err := buildMessageParams(s.defaultModel, s.params, s.historyMessages, messages, s.tools, s.cfg, true, opts...)
+		request, messages, err := buildMessageParams(s.defaultModel, s.params, s.historyMessages, messages, s.tools, s.cfg, s.structuredOutputs, opts...)
 		if err != nil {
 			return nil, err
 		}
@@ -1422,7 +1430,7 @@ func (s *Session) Stream(ctx context.Context, input []gollem.Input, opts ...goll
 			return nil, err
 		}
 
-		request, messages, err := buildMessageParams(s.defaultModel, s.params, s.historyMessages, messages, s.tools, s.cfg, true, opts...)
+		request, messages, err := buildMessageParams(s.defaultModel, s.params, s.historyMessages, messages, s.tools, s.cfg, s.structuredOutputs, opts...)
 		if err != nil {
 			return nil, err
 		}
