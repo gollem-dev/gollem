@@ -51,51 +51,39 @@ func TestClaudeContentGenerate(t *testing.T) {
 
 // TestCreateSystemPrompt tests the createSystemPrompt function
 func TestCreateSystemPrompt(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("empty config returns empty slice", func(t *testing.T) {
-		cfg := gollem.NewSessionConfig()
-		result, err := claude.CreateSystemPrompt(ctx, cfg, false)
-		gt.NoError(t, err)
+		result := claude.CreateSystemPrompt(gollem.NewSessionConfig())
 
 		// Should return empty slice when no system prompt
 		gt.Equal(t, 0, len(result))
 	})
 
-	t.Run("result is correct type", func(t *testing.T) {
-		cfg := gollem.NewSessionConfig()
-		result, err := claude.CreateSystemPrompt(ctx, cfg, false)
-		gt.NoError(t, err)
-
-		// Empty slice can be nil in this implementation
-		gt.Equal(t, 0, len(result))
+	t.Run("system prompt is returned as configured", func(t *testing.T) {
+		cfg := gollem.NewSessionConfig(gollem.WithSessionSystemPrompt("You are a test assistant."))
+		result := claude.CreateSystemPrompt(cfg)
+		gt.A(t, result).Length(1).Required()
+		gt.Equal(t, "You are a test assistant.", result[0].Text)
 	})
 
-	t.Run("JSON content type check", func(t *testing.T) {
-		// Create config with JSON content type
-		cfg := gollem.NewSessionConfig()
-		// Manually set content type since we can't use WithContentType in test
-		// The actual functionality is tested in integration tests
-		result, err := claude.CreateSystemPrompt(ctx, cfg, false)
-		gt.NoError(t, err)
-
-		// At minimum, should not panic and return valid type
-		_ = result
+	t.Run("JSON content type and schema add nothing", func(t *testing.T) {
+		cfg := gollem.NewSessionConfig(
+			gollem.WithSessionSystemPrompt("You are a test assistant."),
+			gollem.WithSessionContentType(gollem.ContentTypeJSON),
+			gollem.WithSessionResponseSchema(structuredOutputTestSchema()))
+		result := claude.CreateSystemPrompt(cfg)
+		gt.A(t, result).Length(1).Required()
+		gt.Equal(t, "You are a test assistant.", result[0].Text)
 	})
 }
 
 // TestSystemPromptSDKCompliance verifies SDK compliance
 func TestSystemPromptSDKCompliance(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("SDK format verification", func(t *testing.T) {
 		// This test verifies the format matches SDK expectations:
 		// []anthropic.TextBlockParam{{Text: "..."}}
 
 		// Create empty config
-		cfg := gollem.NewSessionConfig()
-		result, err := claude.CreateSystemPrompt(ctx, cfg, false)
-		gt.NoError(t, err)
+		result := claude.CreateSystemPrompt(gollem.NewSessionConfig())
 
 		// Empty case should return empty slice
 		gt.Equal(t, 0, len(result))
@@ -119,8 +107,6 @@ func TestSystemPromptSDKCompliance(t *testing.T) {
 
 // TestSystemPromptComment verifies the implementation comment
 func TestSystemPromptComment(t *testing.T) {
-	ctx := context.Background()
-
 	// This test documents that the implementation follows the official SDK format
 	// The createSystemPrompt function should return []anthropic.TextBlockParam
 	// in the format: []anthropic.TextBlockParam{{Text: "..."}}
@@ -128,9 +114,7 @@ func TestSystemPromptComment(t *testing.T) {
 	t.Run("comment accuracy", func(t *testing.T) {
 		// The function returns []anthropic.TextBlockParam, the SDK's system prompt type.
 
-		cfg := gollem.NewSessionConfig()
-		result, err := claude.CreateSystemPrompt(ctx, cfg, false)
-		gt.NoError(t, err)
+		result := claude.CreateSystemPrompt(gollem.NewSessionConfig())
 
 		// Should handle empty case correctly
 		if len(result) > 0 {
@@ -1231,25 +1215,62 @@ func assertJSONEqual(t *testing.T, expected string, actual json.RawMessage) {
 	gt.Equal(t, want, got)
 }
 
+// recordedMessage is one element of the messages array of a recorded request.
+type recordedMessage struct {
+	Role    string           `json:"role"`
+	Content []map[string]any `json:"content"`
+}
+
+func recordedMessages(t *testing.T, body map[string]json.RawMessage) []recordedMessage {
+	t.Helper()
+	var messages []recordedMessage
+	gt.NoError(t, json.Unmarshal(body["messages"], &messages)).Required()
+	return messages
+}
+
+// instructionText returns the text of the last message of the request after
+// checking that it is an instruction message: a user message holding a single
+// text block.
+func instructionText(t *testing.T, body map[string]json.RawMessage) string {
+	t.Helper()
+	messages := recordedMessages(t, body)
+	gt.A(t, messages).Longer(0).Required()
+	last := messages[len(messages)-1]
+	gt.Equal(t, "user", last.Role)
+	gt.A(t, last.Content).Length(1).Required()
+	gt.Equal(t, "text", last.Content[0]["type"])
+	text, ok := last.Content[0]["text"].(string)
+	gt.True(t, ok).Required()
+	return text
+}
+
+// noSchemaInstruction is the instruction message text for a JSON content type
+// without a schema.
+const noSchemaInstruction = "Format only your next response as valid JSON. This instruction does not apply to any later response."
+
 func TestResponseSchemaIsSentAsOutputFormat(t *testing.T) {
-	const model = "claude-opus-5-5"
+	const model = "claude-sonnet-5-5"
 	const systemPrompt = "You are a test assistant."
 
 	for _, p := range requestPaths {
 		t.Run(p.name, func(t *testing.T) {
-			t.Run("per-call schema leaves system and tools unchanged", func(t *testing.T) {
+			t.Run("per-call schema leaves system, tools and messages unchanged", func(t *testing.T) {
 				rs := newRecordingServer(t, "{}")
-				session := p.newSession(t, rs.srv.URL, model,
+				plain := p.newSession(t, rs.srv.URL, model,
 					gollem.WithSessionSystemPrompt(systemPrompt),
 					gollem.WithSessionTools(&cachePromptTestTool{}))
-
-				p.send(t, session)
+				p.send(t, plain)
 				without := rs.lastBody(t)
-				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+
+				structured := p.newSession(t, rs.srv.URL, model,
+					gollem.WithSessionSystemPrompt(systemPrompt),
+					gollem.WithSessionTools(&cachePromptTestTool{}))
+				p.send(t, structured, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
 				with := rs.lastBody(t)
 
 				gt.Equal(t, string(without["system"]), string(with["system"]))
 				gt.Equal(t, string(without["tools"]), string(with["tools"]))
+				gt.Equal(t, string(without["messages"]), string(with["messages"]))
 				_, hasOutputConfig := without["output_config"]
 				gt.False(t, hasOutputConfig)
 				assertJSONEqual(t, `{"format":`+structuredOutputTestFormat+`}`, with["output_config"])
@@ -1285,22 +1306,266 @@ func TestResponseSchemaIsSentAsOutputFormat(t *testing.T) {
 				assertJSONEqual(t, `{"format":`+structuredOutputTestFormat+`}`, rs.lastBody(t)["output_config"])
 			})
 
-			t.Run("model without structured outputs gets the schema in the system prompt", func(t *testing.T) {
+		})
+	}
+}
+
+func TestInstructionMessage(t *testing.T) {
+	const systemPrompt = "You are a test assistant."
+	const unsupportedModel = "claude-sonnet-4-20250514"
+
+	otherSchema := func() *gollem.Parameter {
+		return &gollem.Parameter{
+			Type:       gollem.TypeObject,
+			Properties: map[string]*gollem.Parameter{"other": {Type: gollem.TypeBoolean}},
+		}
+	}
+	question := recordedMessage{Role: "user", Content: []map[string]any{{"type": "text", "text": "question"}}}
+
+	for _, p := range requestPaths {
+		t.Run(p.name, func(t *testing.T) {
+			t.Run("per-call schema is sent as an instruction message", func(t *testing.T) {
 				rs := newRecordingServer(t, "{}")
-				session := p.newSession(t, rs.srv.URL, "claude-sonnet-4-20250514",
-					gollem.WithSessionSystemPrompt(systemPrompt))
+				session := p.newSession(t, rs.srv.URL, unsupportedModel, gollem.WithSessionSystemPrompt(systemPrompt))
 				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
 				body := rs.lastBody(t)
 
+				assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
 				_, hasOutputConfig := body["output_config"]
 				gt.False(t, hasOutputConfig)
-				var system []anthropic.TextBlockParam
-				gt.NoError(t, json.Unmarshal(body["system"], &system))
-				gt.A(t, system).Length(1).Required()
-				gt.S(t, system[0].Text).HasPrefix(systemPrompt)
-				gt.S(t, system[0].Text).Contains("Your response must conform to this JSON Schema")
-				gt.S(t, system[0].Text).Contains(`"maxLength": 20`)
+				messages := recordedMessages(t, body)
+				gt.A(t, messages).Length(2).Required()
+				gt.Equal(t, question, messages[0])
+				text := instructionText(t, body)
+				gt.S(t, text).HasPrefix(noSchemaInstruction + "\n\nYour next response must conform to this JSON Schema:\n")
+				gt.S(t, text).Contains(`"maxLength": 20`)
 			})
+
+			t.Run("session schema is sent as an instruction message", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel,
+					gollem.WithSessionSystemPrompt(systemPrompt),
+					gollem.WithSessionContentType(gollem.ContentTypeJSON),
+					gollem.WithSessionResponseSchema(structuredOutputTestSchema()))
+				p.send(t, session)
+				body := rs.lastBody(t)
+
+				assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
+				messages := recordedMessages(t, body)
+				gt.A(t, messages).Length(2).Required()
+				gt.Equal(t, question, messages[0])
+				gt.S(t, instructionText(t, body)).Contains(`"maxLength": 20`)
+			})
+
+			t.Run("text call gets no instruction message", func(t *testing.T) {
+				rs := newRecordingServer(t, "answer")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel, gollem.WithSessionSystemPrompt(systemPrompt))
+				p.send(t, session)
+				gt.Equal(t, []recordedMessage{question}, recordedMessages(t, rs.lastBody(t)))
+			})
+
+			t.Run("only the per-call schema is written when both are set", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel,
+					gollem.WithSessionContentType(gollem.ContentTypeJSON),
+					gollem.WithSessionResponseSchema(otherSchema()))
+				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				body := rs.lastBody(t)
+
+				gt.A(t, recordedMessages(t, body)).Length(2)
+				text := instructionText(t, body)
+				gt.S(t, text).Contains(`"answer"`)
+				gt.S(t, text).NotContains(`"other"`)
+			})
+
+			t.Run("earlier turns are resent unchanged when JSON and text alternate", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel, gollem.WithSessionSystemPrompt(systemPrompt))
+				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				first := rs.lastBody(t)
+				p.send(t, session)
+				second := rs.lastBody(t)
+				p.send(t, session, gollem.WithGenerateResponseSchema(otherSchema()))
+				third := rs.lastBody(t)
+
+				firstRaw := rawMessages(t, first)
+				secondRaw := rawMessages(t, second)
+				thirdRaw := rawMessages(t, third)
+				gt.A(t, firstRaw).Length(2).Required()
+				gt.A(t, secondRaw).Length(4).Required()
+				gt.A(t, thirdRaw).Length(7).Required()
+				for i := range firstRaw {
+					gt.Equal(t, string(firstRaw[i]), string(secondRaw[i]))
+					gt.Equal(t, string(firstRaw[i]), string(thirdRaw[i]))
+				}
+				gt.Equal(t, question, recordedMessages(t, second)[3])
+				gt.S(t, instructionText(t, third)).Contains(`"other"`)
+				gt.Equal(t, string(first["system"]), string(second["system"]))
+				gt.Equal(t, string(first["system"]), string(third["system"]))
+
+				history, err := session.History()
+				gt.NoError(t, err).Required()
+				var roles []gollem.MessageRole
+				for _, msg := range history.Messages {
+					roles = append(roles, msg.Role)
+				}
+				gt.Equal(t, []gollem.MessageRole{
+					gollem.RoleUser, gollem.RoleUser, gollem.RoleAssistant,
+					gollem.RoleUser, gollem.RoleAssistant,
+					gollem.RoleUser, gollem.RoleUser, gollem.RoleAssistant,
+				}, roles)
+			})
+
+			t.Run("tool result is followed by the instruction message", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel)
+				p.sendInput(t, session, []gollem.Input{toolResultInput()}, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				body := rs.lastBody(t)
+
+				messages := recordedMessages(t, body)
+				gt.A(t, messages).Length(2).Required()
+				gt.A(t, messages[0].Content).Length(1).Required()
+				gt.Equal(t, "tool_result", messages[0].Content[0]["type"])
+				gt.S(t, instructionText(t, body)).Contains(`"maxLength": 20`)
+			})
+
+			t.Run("session schema instruction is sent with a tool result", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel,
+					gollem.WithSessionContentType(gollem.ContentTypeJSON),
+					gollem.WithSessionResponseSchema(structuredOutputTestSchema()))
+				p.sendInput(t, session, []gollem.Input{toolResultInput()})
+				body := rs.lastBody(t)
+
+				gt.A(t, recordedMessages(t, body)).Length(2)
+				gt.S(t, instructionText(t, body)).Contains(`"maxLength": 20`)
+			})
+
+			t.Run("input messages are the same with and without a schema", func(t *testing.T) {
+				image, err := gollem.NewImage([]byte("\x89PNG\r\n\x1a\n"), gollem.WithMimeType(gollem.ImageMimeTypePNG))
+				gt.NoError(t, err).Required()
+				input := []gollem.Input{gollem.Text("question"), image}
+				rs := newRecordingServer(t, "{}")
+				plain := p.newSession(t, rs.srv.URL, unsupportedModel)
+				p.sendInput(t, plain, input)
+				without := rawMessages(t, rs.lastBody(t))
+				structured := p.newSession(t, rs.srv.URL, unsupportedModel)
+				p.sendInput(t, structured, input, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				with := rawMessages(t, rs.lastBody(t))
+
+				gt.A(t, without).Length(1).Required()
+				gt.A(t, with).Length(2).Required()
+				gt.Equal(t, string(without[0]), string(with[0]))
+			})
+
+			t.Run("empty input sends only the instruction message", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel)
+				p.sendInput(t, session, []gollem.Input{gollem.Text("")}, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				body := rs.lastBody(t)
+
+				gt.A(t, recordedMessages(t, body)).Length(1)
+				gt.S(t, instructionText(t, body)).Contains(`"maxLength": 20`)
+			})
+
+			t.Run("invalid schema fails before the request", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel)
+				err := p.sendErr(session, gollem.WithGenerateResponseSchema(&gollem.Parameter{Type: "invalid"}))
+				gt.True(t, errors.Is(err, gollem.ErrInvalidParameter))
+
+				rs.mu.Lock()
+				gt.A(t, rs.bodies).Length(0)
+				rs.mu.Unlock()
+				history, histErr := session.History()
+				gt.NoError(t, histErr).Required()
+				gt.A(t, history.Messages).Length(0)
+			})
+
+			t.Run("cache breakpoint on the instruction is not stored in the history", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, unsupportedModel, gollem.WithSessionPromptCache(true))
+				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				first := recordedMessages(t, rs.lastBody(t))
+				p.send(t, session)
+				second := recordedMessages(t, rs.lastBody(t))
+
+				gt.A(t, first).Length(2).Required()
+				gt.NotEqual(t, nil, first[1].Content[0]["cache_control"])
+				gt.A(t, second).Longer(1).Required()
+				_, hasCacheControl := second[1].Content[0]["cache_control"]
+				gt.False(t, hasCacheControl)
+			})
+		})
+	}
+}
+
+// rawMessages returns each element of the messages array of a recorded request
+// as the bytes the client sent.
+func rawMessages(t *testing.T, body map[string]json.RawMessage) []json.RawMessage {
+	t.Helper()
+	var messages []json.RawMessage
+	gt.NoError(t, json.Unmarshal(body["messages"], &messages)).Required()
+	return messages
+}
+
+func toolResultInput() gollem.FunctionResponse {
+	return gollem.FunctionResponse{ID: "toolu_1", Name: "fetch", Data: map[string]any{"ok": true}}
+}
+
+// sendInput calls Generate or Stream with the given input and returns the
+// concatenated response text.
+func (p requestPath) sendInput(t *testing.T, session gollem.Session, input []gollem.Input, opts ...gollem.GenerateOption) string {
+	t.Helper()
+	ctx := context.Background()
+	if !p.stream {
+		resp, err := session.Generate(ctx, input, opts...)
+		gt.NoError(t, err)
+		if resp == nil {
+			return ""
+		}
+		return strings.Join(resp.Texts, "")
+	}
+	ch, err := session.Stream(ctx, input, opts...)
+	gt.NoError(t, err).Required()
+	var texts []string
+	for resp := range ch {
+		gt.NoError(t, resp.Error)
+		texts = append(texts, resp.Texts...)
+	}
+	return strings.Join(texts, "")
+}
+
+func TestInstructionMessageIsTraced(t *testing.T) {
+	const systemPrompt = "You are a test assistant."
+
+	for _, p := range []requestPath{requestPaths[0], requestPaths[2]} {
+		t.Run(p.name, func(t *testing.T) {
+			rs := newRecordingServer(t, "{}")
+			session := p.newSession(t, rs.srv.URL, "claude-sonnet-4-20250514", gollem.WithSessionSystemPrompt(systemPrompt))
+			rec := trace.New()
+			ctx := rec.StartAgentExecute(context.Background())
+			ctx = trace.WithHandler(ctx, rec)
+			_, err := session.Generate(ctx, []gollem.Input{gollem.Text("question")},
+				gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+			gt.NoError(t, err).Required()
+			rec.EndAgentExecute(ctx, nil)
+
+			var llmSpan *trace.Span
+			for _, child := range rec.Trace().RootSpan.Children {
+				if child.Kind == trace.SpanKindLLMCall {
+					llmSpan = child
+					break
+				}
+			}
+			gt.Value(t, llmSpan).NotNil().Required()
+
+			request := llmSpan.LLMCall.Request
+			gt.Equal(t, systemPrompt, request.SystemPrompt)
+			gt.A(t, request.Messages).Length(2).Required()
+			gt.Equal(t, []trace.MessageContent{trace.NewTextContent("question")}, request.Messages[0].Contents)
+			gt.A(t, request.Messages[1].Contents).Length(1).Required()
+			gt.S(t, request.Messages[1].Contents[0].Text).HasPrefix(noSchemaInstruction)
 		})
 	}
 }
@@ -1351,7 +1616,7 @@ func TestMapInResponseSchema(t *testing.T) {
 			rs := newRecordingServer(t, "{}")
 			model := "claude-sonnet-4-20250514"
 			if tc.structured {
-				model = "claude-opus-5-5"
+				model = "claude-sonnet-5-5"
 			}
 
 			var sessionOpts []gollem.SessionOption
@@ -1379,10 +1644,7 @@ func TestMapInResponseSchema(t *testing.T) {
 			body := rs.lastBody(t)
 			_, hasOutputConfig := body["output_config"]
 			gt.False(t, hasOutputConfig)
-			var system []anthropic.TextBlockParam
-			gt.NoError(t, json.Unmarshal(body["system"], &system))
-			gt.A(t, system).Length(1).Required()
-			gt.S(t, system[0].Text).Contains(`"additionalProperties": {`)
+			gt.S(t, instructionText(t, body)).Contains(`"additionalProperties": {`)
 		}
 	}
 
@@ -1397,14 +1659,14 @@ func TestMapInResponseSchema(t *testing.T) {
 	t.Run("structured outputs rejects a session map: Vertex Generate", runTest(testCase{path: vertexGenerate, structured: true}))
 	t.Run("structured outputs rejects a session map: Vertex Stream", runTest(testCase{path: vertexStream, structured: true}))
 
-	t.Run("system prompt keeps a per-call map: API Generate", runTest(testCase{path: apiGenerate, perCall: true}))
-	t.Run("system prompt keeps a per-call map: API Stream", runTest(testCase{path: apiStream, perCall: true}))
-	t.Run("system prompt keeps a per-call map: Vertex Generate", runTest(testCase{path: vertexGenerate, perCall: true}))
-	t.Run("system prompt keeps a per-call map: Vertex Stream", runTest(testCase{path: vertexStream, perCall: true}))
-	t.Run("system prompt keeps a session map: API Generate", runTest(testCase{path: apiGenerate}))
-	t.Run("system prompt keeps a session map: API Stream", runTest(testCase{path: apiStream}))
-	t.Run("system prompt keeps a session map: Vertex Generate", runTest(testCase{path: vertexGenerate}))
-	t.Run("system prompt keeps a session map: Vertex Stream", runTest(testCase{path: vertexStream}))
+	t.Run("instruction message keeps a per-call map: API Generate", runTest(testCase{path: apiGenerate, perCall: true}))
+	t.Run("instruction message keeps a per-call map: API Stream", runTest(testCase{path: apiStream, perCall: true}))
+	t.Run("instruction message keeps a per-call map: Vertex Generate", runTest(testCase{path: vertexGenerate, perCall: true}))
+	t.Run("instruction message keeps a per-call map: Vertex Stream", runTest(testCase{path: vertexStream, perCall: true}))
+	t.Run("instruction message keeps a session map: API Generate", runTest(testCase{path: apiGenerate}))
+	t.Run("instruction message keeps a session map: API Stream", runTest(testCase{path: apiStream}))
+	t.Run("instruction message keeps a session map: Vertex Generate", runTest(testCase{path: vertexGenerate}))
+	t.Run("instruction message keeps a session map: Vertex Stream", runTest(testCase{path: vertexStream}))
 }
 
 // blocksPrompt asks for a reply that uses both kinds of newBlocksParameter.
@@ -1452,20 +1714,24 @@ func TestAnyOfResponseSchemaLive(t *testing.T) {
 		t.Skip("TEST_CLAUDE_API_KEY is not set")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
+	for _, model := range []string{"claude-sonnet-5-5", "claude-haiku-5-5"} {
+		t.Run(model, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+			defer cancel()
 
-	client, err := claude.New(ctx, apiKey)
-	gt.NoError(t, err).Required()
-	session, err := client.NewSession(ctx)
-	gt.NoError(t, err).Required()
+			client, err := claude.New(ctx, apiKey, claude.WithModel(model))
+			gt.NoError(t, err).Required()
+			session, err := client.NewSession(ctx)
+			gt.NoError(t, err).Required()
 
-	resp, err := session.Generate(ctx, []gollem.Input{gollem.Text(blocksPrompt)},
-		gollem.WithGenerateResponseSchema(newBlocksParameter()), gollem.WithMaxTokens(maxTestTokens))
-	gt.NoError(t, err).Required()
-	gt.A(t, resp.Texts).Length(1).Required()
-	t.Logf("reply: %s", resp.Texts[0])
-	assertBlocksReply(t, resp.Texts[0])
+			resp, err := session.Generate(ctx, []gollem.Input{gollem.Text(blocksPrompt)},
+				gollem.WithGenerateResponseSchema(newBlocksParameter()), gollem.WithMaxTokens(maxTestTokens))
+			gt.NoError(t, err).Required()
+			gt.A(t, resp.Texts).Length(1).Required()
+			t.Logf("reply: %s", resp.Texts[0])
+			assertBlocksReply(t, resp.Texts[0])
+		})
+	}
 }
 
 func TestJSONIsExtractedHoweverTheSchemaIsSent(t *testing.T) {
@@ -1483,10 +1749,10 @@ func TestJSONIsExtractedHoweverTheSchemaIsSent(t *testing.T) {
 		}
 	}
 
-	t.Run("API Generate with structured outputs", runTest(requestPaths[0], "claude-opus-5-5"))
-	t.Run("Vertex Generate with structured outputs", runTest(requestPaths[2], "claude-opus-5-5"))
-	t.Run("API Generate with the schema in the system prompt", runTest(requestPaths[0], "claude-sonnet-4-20250514"))
-	t.Run("Vertex Generate with the schema in the system prompt", runTest(requestPaths[2], "claude-sonnet-4-20250514"))
+	t.Run("API Generate with structured outputs", runTest(requestPaths[0], "claude-sonnet-5-5"))
+	t.Run("Vertex Generate with structured outputs", runTest(requestPaths[2], "claude-sonnet-5-5"))
+	t.Run("API Generate with the schema in an instruction message", runTest(requestPaths[0], "claude-sonnet-4-20250514"))
+	t.Run("Vertex Generate with the schema in an instruction message", runTest(requestPaths[2], "claude-sonnet-4-20250514"))
 }
 
 func TestJSONContentTypeWithoutSchema(t *testing.T) {
@@ -1496,7 +1762,7 @@ func TestJSONContentTypeWithoutSchema(t *testing.T) {
 		t.Run(p.name, func(t *testing.T) {
 			t.Run("supported model gets the system prompt as written", func(t *testing.T) {
 				rs := newRecordingServer(t, "{}")
-				session := p.newSession(t, rs.srv.URL, "claude-opus-5-5",
+				session := p.newSession(t, rs.srv.URL, "claude-sonnet-5-5",
 					gollem.WithSessionSystemPrompt(systemPrompt),
 					gollem.WithSessionContentType(gollem.ContentTypeJSON))
 				p.send(t, session)
@@ -1505,19 +1771,20 @@ func TestJSONContentTypeWithoutSchema(t *testing.T) {
 				assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
 				_, hasOutputConfig := body["output_config"]
 				gt.False(t, hasOutputConfig)
+				gt.A(t, recordedMessages(t, body)).Length(1)
 			})
 
-			t.Run("model without structured outputs gets the JSON instruction", func(t *testing.T) {
+			t.Run("model without structured outputs gets the JSON instruction message", func(t *testing.T) {
 				rs := newRecordingServer(t, "{}")
 				session := p.newSession(t, rs.srv.URL, "claude-sonnet-4-20250514",
 					gollem.WithSessionSystemPrompt(systemPrompt),
 					gollem.WithSessionContentType(gollem.ContentTypeJSON))
 				p.send(t, session)
+				body := rs.lastBody(t)
 
-				var system []anthropic.TextBlockParam
-				gt.NoError(t, json.Unmarshal(rs.lastBody(t)["system"], &system))
-				gt.A(t, system).Length(1).Required()
-				gt.Equal(t, systemPrompt+"\nPlease format your response as valid JSON.", system[0].Text)
+				assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
+				gt.A(t, recordedMessages(t, body)).Length(2)
+				gt.Equal(t, noSchemaInstruction, instructionText(t, body))
 			})
 		})
 	}
@@ -1539,7 +1806,7 @@ func TestVertexStructuredOutputsDisabled(t *testing.T) {
 				option.WithMaxRetries(0),
 			)
 			client := claude.NewVertexClientWithAnthropicClient(&anthropicClient,
-				claude.WithVertexModel("claude-opus-5-5"),
+				claude.WithVertexModel("claude-sonnet-5-5"),
 				claude.WithVertexStructuredOutputsDisabled())
 			session, err := client.NewSession(context.Background(), gollem.WithSessionSystemPrompt(systemPrompt))
 			gt.NoError(t, err).Required()
@@ -1549,11 +1816,9 @@ func TestVertexStructuredOutputsDisabled(t *testing.T) {
 
 			_, hasOutputConfig := body["output_config"]
 			gt.False(t, hasOutputConfig)
-			var system []anthropic.TextBlockParam
-			gt.NoError(t, json.Unmarshal(body["system"], &system))
-			gt.A(t, system).Length(1).Required()
-			gt.S(t, system[0].Text).HasPrefix(systemPrompt)
-			gt.S(t, system[0].Text).Contains("Your response must conform to this JSON Schema")
+			assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
+			gt.A(t, recordedMessages(t, body)).Length(2)
+			gt.S(t, instructionText(t, body)).Contains("Your next response must conform to this JSON Schema")
 		})
 	}
 }
@@ -1568,36 +1833,46 @@ func TestAPIErrorReachesCaller(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	for _, p := range requestPaths {
-		t.Run(p.name, func(t *testing.T) {
-			session := p.newSession(t, srv.URL, "claude-opus-5-5")
-			input := []gollem.Input{gollem.Text("question")}
-			opts := []gollem.GenerateOption{gollem.WithGenerateResponseSchema(structuredOutputTestSchema())}
-
-			var err error
-			if p.stream {
-				ch, startErr := session.Stream(context.Background(), input, opts...)
-				err = startErr
-				if startErr == nil {
-					for resp := range ch {
-						if resp.Error != nil {
-							err = resp.Error
-						}
-					}
-				}
-			} else {
-				_, err = session.Generate(context.Background(), input, opts...)
-			}
-
-			gt.Error(t, err).Required()
-			gt.S(t, err.Error()).Contains(apiMessage)
-
-			// A failed call must not leave the question in the history.
-			history, histErr := session.History()
-			gt.NoError(t, histErr).Required()
-			gt.A(t, history.Messages).Length(0)
-		})
+	for _, model := range []string{"claude-opus-5-5", "claude-sonnet-4-20250514"} {
+		for _, p := range requestPaths {
+			t.Run(model+"/"+p.name, func(t *testing.T) {
+				testAPIErrorReachesCaller(t, p, srv.URL, model, apiMessage)
+			})
+		}
 	}
+}
+
+// testAPIErrorReachesCaller checks that an API error reaches the caller and
+// that the failed call, with its instruction message if any, is not left in
+// the history.
+func testAPIErrorReachesCaller(t *testing.T, p requestPath, baseURL, model, apiMessage string) {
+	t.Helper()
+	session := p.newSession(t, baseURL, model)
+	input := []gollem.Input{gollem.Text("question")}
+	opts := []gollem.GenerateOption{gollem.WithGenerateResponseSchema(structuredOutputTestSchema())}
+
+	var err error
+	if p.stream {
+		ch, startErr := session.Stream(context.Background(), input, opts...)
+		err = startErr
+		if startErr == nil {
+			for resp := range ch {
+				if resp.Error != nil {
+					err = resp.Error
+				}
+			}
+		}
+	} else {
+		_, err = session.Generate(context.Background(), input, opts...)
+	}
+
+	gt.Error(t, err).Required()
+	gt.S(t, err.Error()).Contains(apiMessage)
+
+	// A failed call must not leave the question in the history.
+	history, histErr := session.History()
+	gt.NoError(t, histErr).Required()
+	gt.A(t, history.Messages).Length(0)
 }
 
 func TestToolCallsDisabled(t *testing.T) {
@@ -2567,4 +2842,236 @@ func llmCallResponse(t *testing.T, rec *trace.Recorder) *trace.LLMResponse {
 	gt.V(t, spans[0].LLMCall).NotNil().Required()
 	gt.V(t, spans[0].LLMCall.Response).NotNil().Required()
 	return spans[0].LLMCall.Response
+}
+
+// instructionLiveModels are the models the instruction message is checked
+// against. Both run the prefix check on thinking blocks, so a request that
+// edited an earlier turn would be rejected with a 400.
+var instructionLiveModels = []string{"claude-sonnet-5-5", "claude-haiku-5-5"}
+
+// instructionLiveTimeout covers several calls with adaptive thinking.
+const instructionLiveTimeout = 5 * time.Minute
+
+// instructionLiveBackends are the clients the instruction message is checked
+// through.
+var instructionLiveBackends = []string{"Claude API", "Vertex AI"}
+
+// newInstructionLiveSession returns a session that sends response schemas as
+// instruction messages, with adaptive thinking on so that thinking blocks are
+// carried through the history. The Claude API client has no option for this,
+// so its session is switched with claude.DisableStructuredOutputs.
+func newInstructionLiveSession(ctx context.Context, t *testing.T, backend, model string, opts ...gollem.SessionOption) gollem.Session {
+	t.Helper()
+	switch backend {
+	case "Claude API":
+		apiKey, ok := os.LookupEnv("TEST_CLAUDE_API_KEY")
+		if !ok {
+			t.Skip("TEST_CLAUDE_API_KEY is not set")
+		}
+		client, err := claude.New(ctx, apiKey,
+			claude.WithModel(model),
+			claude.WithMaxTokens(8192),
+			claude.WithEffort(claude.EffortXHigh),
+			claude.WithAdaptiveThinking(claude.ThinkingDisplaySummarized))
+		gt.NoError(t, err).Required()
+		session, err := client.NewSession(ctx, opts...)
+		gt.NoError(t, err).Required()
+		claude.DisableStructuredOutputs(session)
+		return session
+	case "Vertex AI":
+		projectID, ok := os.LookupEnv("TEST_CLAUDE_VERTEX_AI_PROJECT_ID")
+		if !ok {
+			t.Skip("TEST_CLAUDE_VERTEX_AI_PROJECT_ID is not set")
+		}
+		client, err := claude.NewWithVertex(ctx, "global", projectID,
+			claude.WithVertexModel(model),
+			claude.WithVertexMaxTokens(8192),
+			claude.WithVertexStructuredOutputsDisabled(),
+			claude.WithVertexEffort(claude.EffortXHigh),
+			claude.WithVertexAdaptiveThinking(claude.ThinkingDisplaySummarized))
+		gt.NoError(t, err).Required()
+		session, err := client.NewSession(ctx, opts...)
+		gt.NoError(t, err).Required()
+		return session
+	}
+	t.Fatalf("unknown backend %q", backend)
+	return nil
+}
+
+// forEachInstructionLiveCase runs test for every backend and model.
+func forEachInstructionLiveCase(t *testing.T, test func(t *testing.T, backend, model string)) {
+	for _, backend := range instructionLiveBackends {
+		for _, model := range instructionLiveModels {
+			t.Run(backend+"/"+model, func(t *testing.T) {
+				test(t, backend, model)
+			})
+		}
+	}
+}
+
+func weatherSchema() *gollem.Parameter {
+	return &gollem.Parameter{
+		Type: gollem.TypeObject,
+		Properties: map[string]*gollem.Parameter{
+			"city":          {Type: gollem.TypeString, Required: true},
+			"temperature_c": {Type: gollem.TypeInteger, Required: true},
+		},
+	}
+}
+
+func summarySchema() *gollem.Parameter {
+	return &gollem.Parameter{
+		Type: gollem.TypeObject,
+		Properties: map[string]*gollem.Parameter{
+			"summary":    {Type: gollem.TypeString, Required: true},
+			"word_count": {Type: gollem.TypeInteger, Required: true},
+		},
+	}
+}
+
+// generateText calls Generate and returns the joined response text.
+func generateText(ctx context.Context, t *testing.T, session gollem.Session, input []gollem.Input, opts ...gollem.GenerateOption) (*gollem.Response, string) {
+	t.Helper()
+	resp, err := session.Generate(ctx, input, opts...)
+	gt.NoError(t, err).Required()
+	text := strings.Join(resp.Texts, "")
+	t.Logf("reply: %s", text)
+	return resp, text
+}
+
+// assertJSONReply checks that text is a JSON object that conforms to schema
+// and returns the object.
+func assertJSONReply(t *testing.T, text string, schema *gollem.Parameter) map[string]any {
+	t.Helper()
+	var reply map[string]any
+	gt.NoError(t, json.Unmarshal([]byte(text), &reply)).Required()
+	gt.NoError(t, schema.ValidateValue("reply", reply))
+	return reply
+}
+
+// assertTextReply checks that text is a non-empty reply that is not valid
+// JSON, which is what a call without a schema asks for.
+func assertTextReply(t *testing.T, text string) {
+	t.Helper()
+	gt.True(t, strings.TrimSpace(text) != "")
+	gt.False(t, json.Valid([]byte(text)))
+}
+
+// requireSignedThinking fails the test unless the history holds a thinking
+// block with a signature. Adaptive thinking may skip thinking, and a run
+// without one would not show that later calls keep thinking blocks valid.
+func requireSignedThinking(t *testing.T, session gollem.Session) {
+	t.Helper()
+	history, err := session.History()
+	gt.NoError(t, err).Required()
+	for _, msg := range history.Messages {
+		for _, content := range msg.Contents {
+			if content.Type == gollem.MessageContentTypeThinking && content.Provider != nil && len(content.Provider.Data) > 0 {
+				return
+			}
+		}
+	}
+	t.Fatal("history holds no signed thinking block")
+}
+
+// countInstructionMessages counts the user messages in the history that hold
+// only an instruction for a JSON response.
+func countInstructionMessages(t *testing.T, session gollem.Session) int {
+	t.Helper()
+	history, err := session.History()
+	gt.NoError(t, err).Required()
+	count := 0
+	for _, msg := range history.Messages {
+		if msg.Role != gollem.RoleUser || len(msg.Contents) != 1 || msg.Contents[0].Type != gollem.MessageContentTypeText {
+			continue
+		}
+		text, err := msg.Contents[0].GetTextContent()
+		gt.NoError(t, err).Required()
+		if strings.HasPrefix(text.Text, "Format only your next response as valid JSON.") {
+			count++
+		}
+	}
+	return count
+}
+
+func TestAlternatingSchemaAndTextLive(t *testing.T) {
+	forEachInstructionLiveCase(t, func(t *testing.T, backend, model string) {
+		ctx, cancel := context.WithTimeout(context.Background(), instructionLiveTimeout)
+		defer cancel()
+		session := newInstructionLiveSession(ctx, t, backend, model)
+
+		_, text := generateText(ctx, t, session,
+			[]gollem.Input{gollem.Text("Tokyo's average August high is about 31 °C and the low about 24 °C. " +
+				"Reason step by step about a realistic temperature at 3 pm on a typical August day, then give it as an example.")},
+			gollem.WithGenerateResponseSchema(weatherSchema()))
+		assertJSONReply(t, text, weatherSchema())
+		requireSignedThinking(t, session)
+
+		_, text = generateText(ctx, t, session,
+			[]gollem.Input{gollem.Text("Describe that weather in one plain English sentence. Do not use JSON.")})
+		assertTextReply(t, text)
+
+		_, text = generateText(ctx, t, session,
+			[]gollem.Input{gollem.Text("Summarize your previous sentence.")},
+			gollem.WithGenerateResponseSchema(summarySchema()))
+		reply := assertJSONReply(t, text, summarySchema())
+		_, hasCity := reply["city"]
+		gt.False(t, hasCity)
+
+		_, text = generateText(ctx, t, session,
+			[]gollem.Input{gollem.Text("Say thank you in plain text.")})
+		assertTextReply(t, text)
+
+		gt.Equal(t, 2, countInstructionMessages(t, session))
+	})
+}
+
+// weatherTool is a get_weather tool for the live tool loop. Its result is
+// returned by the test itself, so Run is never called.
+type weatherTool struct{}
+
+func (weatherTool) Spec() gollem.ToolSpec {
+	return gollem.ToolSpec{
+		Name:        "get_weather",
+		Description: "Returns the current weather of a city.",
+		Parameters: map[string]*gollem.Parameter{
+			"city": {Type: gollem.TypeString, Description: "City name", Required: true},
+		},
+	}
+}
+
+func (weatherTool) Run(ctx context.Context, args map[string]any) (map[string]any, error) {
+	return map[string]any{"condition": "sunny", "temperature_c": 31}, nil
+}
+
+func TestToolLoopThenSchemaLive(t *testing.T) {
+	forEachInstructionLiveCase(t, func(t *testing.T, backend, model string) {
+		ctx, cancel := context.WithTimeout(context.Background(), instructionLiveTimeout)
+		defer cancel()
+		session := newInstructionLiveSession(ctx, t, backend, model, gollem.WithSessionTools(weatherTool{}))
+
+		resp, _ := generateText(ctx, t, session,
+			[]gollem.Input{gollem.Text("Of Tokyo, Sapporo and Naha, work out which one has the highest average August temperature, " +
+				"then call get_weather for that city only. Do not write your reasoning in the reply.")})
+		gt.A(t, resp.FunctionCalls).Longer(0).Required()
+		requireSignedThinking(t, session)
+
+		var results []gollem.Input
+		for _, call := range resp.FunctionCalls {
+			gt.Equal(t, "get_weather", call.Name)
+			results = append(results, gollem.FunctionResponse{
+				ID:   call.ID,
+				Name: call.Name,
+				Data: map[string]any{"city": call.Arguments["city"], "condition": "sunny", "temperature_c": 31},
+			})
+		}
+		_, text := generateText(ctx, t, session, results,
+			gollem.WithGenerateResponseSchema(weatherSchema()), gollem.WithToolCallsDisabled())
+		assertJSONReply(t, text, weatherSchema())
+
+		_, text = generateText(ctx, t, session,
+			[]gollem.Input{gollem.Text("Explain that result in one plain English sentence. Do not use JSON.")},
+			gollem.WithToolCallsDisabled())
+		assertTextReply(t, text)
+	})
 }

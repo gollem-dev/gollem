@@ -33,7 +33,7 @@ const fallbackMaxOutputTokens int64 = 64000
 
 // structuredOutputsUnsupported lists normalized IDs of the Claude models that
 // reject output_config.format with a 400. A response schema for these models is
-// written into the system prompt instead.
+// sent in an instruction message instead (see responseFormatInstruction).
 //
 // The list names the models that lack the feature rather than the ones that
 // have it, because every model released since structured outputs shipped

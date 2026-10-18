@@ -210,7 +210,7 @@ func ConvertParameterToJSONString(param *gollem.Parameter) (string, error) {
 	schemaObj["$schema"] = "http://json-schema.org/draft-07/schema#"
 
 	// Marshal to pretty JSON. HTML escaping is disabled because this string is embedded
-	// verbatim into the system prompt: with it on, a description containing "<", ">" or "&"
+	// verbatim into a prompt: with it on, a description containing "<", ">" or "&"
 	// reaches the model as a unicode escape sequence instead of the character itself.
 	schemaJSON, err := jsonutil.MarshalIndentNoEscape(schemaObj, "", "  ")
 	if err != nil {
