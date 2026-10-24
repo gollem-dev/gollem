@@ -138,6 +138,9 @@ type Client struct {
 	// issuerScope distinguishes this client's provider-bound data from data
 	// issued by another client of the same model. See WithIssuerScope.
 	issuerScope string
+
+	// structuredOutputs allows sending response schemas as output_config.format.
+	structuredOutputs bool
 }
 
 // Option is a function that configures a Client.
@@ -240,6 +243,63 @@ func WithIssuerScope(scope string) Option {
 	}
 }
 
+// WithStructuredOutputsDisabled stops sending response schemas as structured
+// outputs (output_config.format), so that every model receives them in an
+// instruction message instead. WithVertexStructuredOutputsDisabled does the
+// same for a VertexClient, and the description below applies to both options.
+//
+// Use it when the caller prefers the schema stated in the conversation over
+// constrained decoding.
+//
+// # How a response schema is sent
+//
+// The schema in effect for a call is the per-call schema
+// (gollem.WithGenerateResponseSchema) if given, otherwise the session schema
+// (gollem.WithSessionResponseSchema). The session schema is used only when the
+// session content type is gollem.ContentTypeJSON; without it the session schema
+// is ignored, with or without this option.
+//
+// Without this option, on a model that supports structured outputs:
+//   - The schema in effect is sent as output_config.format. Keywords structured
+//     outputs rejects (minimum, maximum, minLength, maxLength, pattern,
+//     maxItems, minItems above 1) are moved into the field description.
+//   - The system prompt is sent exactly as configured. Nothing is appended for
+//     the schema or for ContentTypeJSON, including ContentTypeJSON without a
+//     schema, where the caller's own prompt has to ask for JSON.
+//
+// With this option, and on models without structured outputs (Claude Sonnet 4,
+// Claude Opus 4, Claude 3 and Claude 2) regardless of it:
+//   - No output_config.format is sent, and the system prompt is sent exactly
+//     as configured. Other output_config fields, such as the effort set by
+//     WithEffort or WithVertexEffort, are still sent.
+//   - A call whose content type in effect is JSON gets an instruction message:
+//     a user message, after the messages built from the call's inputs, holding
+//     only "Format only your next response as valid JSON. This instruction does
+//     not apply to any later response." followed by the schema in effect as
+//     JSON text when there is one. It is added on every such call, including
+//     one whose input is only tool results.
+//   - The instruction message is stored in the history and sent unchanged on
+//     later calls. A tool loop in a ContentTypeJSON session therefore stores
+//     one copy of the schema per call.
+//
+// In every case, when the content type in effect is JSON (ContentTypeJSON, or
+// any call with a per-call schema), Generate extracts the JSON from the
+// response text. Stream returns the text deltas unchanged, so the caller has to
+// concatenate them and extract the JSON itself.
+//
+// # Effect on thinking blocks
+//
+// Claude accepts thinking blocks from earlier turns only while the system
+// prompt, the tool list and the messages before them are the ones they were
+// produced with. With or without this option, a call with a schema leaves the
+// system prompt and tool list unchanged and only appends messages, so a
+// history containing thinking blocks is accepted by a call that adds a schema.
+func WithStructuredOutputsDisabled() Option {
+	return func(c *Client) {
+		c.structuredOutputs = false
+	}
+}
+
 // New creates a new client for the Claude API.
 // It requires an API key and can be configured with additional options.
 func New(ctx context.Context, apiKey string, options ...Option) (*Client, error) {
@@ -251,7 +311,8 @@ func New(ctx context.Context, apiKey string, options ...Option) (*Client, error)
 			Temperature: -1.0, // -1 indicates not set (0.0 is valid)
 			TopP:        -1.0, // -1 indicates not set (0.0 is valid)
 		},
-		timeout: 30 * time.Second, // Default timeout
+		timeout:           30 * time.Second, // Default timeout
+		structuredOutputs: true,
 	}
 
 	for _, option := range options {
@@ -311,9 +372,8 @@ type Session struct {
 	cfg gollem.SessionConfig
 
 	// structuredOutputs allows sending response schemas as
-	// output_config.format. The Claude API client always allows it; tests
-	// turn it off to send schemas as instruction messages to models that
-	// support structured outputs.
+	// output_config.format. It is copied from the client, which turns it off
+	// with WithStructuredOutputsDisabled.
 	structuredOutputs bool
 }
 
@@ -354,7 +414,7 @@ func (c *Client) NewSession(ctx context.Context, options ...gollem.SessionOption
 		issuer:          issuer,
 		cfg:             cfg,
 
-		structuredOutputs: true,
+		structuredOutputs: c.structuredOutputs,
 	}
 
 	return session, nil
@@ -1212,8 +1272,8 @@ func applyPerCallOverrides(request *anthropic.MessageNewParams, opts ...gollem.G
 // output_config.format: the per-call schema if one is given, otherwise the
 // session schema when the session content type is JSON. It is used only with
 // structured outputs; buildMessageParams sends an instruction message instead
-// for a model listed in structuredOutputsUnsupported or a Vertex AI client
-// configured with WithVertexStructuredOutputsDisabled.
+// for a model listed in structuredOutputsUnsupported or a client configured
+// with WithStructuredOutputsDisabled or WithVertexStructuredOutputsDisabled.
 //
 // The system prompt and tool list are not touched: the API accepts thinking
 // blocks from earlier turns only while both are unchanged, whereas changing
