@@ -1790,35 +1790,125 @@ func TestJSONContentTypeWithoutSchema(t *testing.T) {
 	}
 }
 
-func TestVertexStructuredOutputsDisabled(t *testing.T) {
+// clientSettings are the client options the structured outputs tests vary,
+// applied through the option of the Claude API or the Vertex AI client.
+type clientSettings struct {
+	structuredOutputsDisabled bool
+	effort                    claude.Effort
+}
+
+func newAPISessionWithSettings(t *testing.T, baseURL, model string, s clientSettings, opts ...gollem.SessionOption) gollem.Session {
+	t.Helper()
+	clientOpts := []claude.Option{claude.WithBaseURL(baseURL), claude.WithModel(model)}
+	if s.structuredOutputsDisabled {
+		clientOpts = append(clientOpts, claude.WithStructuredOutputsDisabled())
+	}
+	if s.effort != "" {
+		clientOpts = append(clientOpts, claude.WithEffort(s.effort))
+	}
+	client, err := claude.New(context.Background(), "test-key", clientOpts...)
+	gt.NoError(t, err).Required()
+	session, err := client.NewSession(context.Background(), opts...)
+	gt.NoError(t, err).Required()
+	return session
+}
+
+func newVertexSessionWithSettings(t *testing.T, baseURL, model string, s clientSettings, opts ...gollem.SessionOption) gollem.Session {
+	t.Helper()
+	anthropicClient := anthropic.NewClient(
+		option.WithAPIKey("test-key"),
+		option.WithBaseURL(baseURL),
+		option.WithMaxRetries(0),
+	)
+	clientOpts := []claude.VertexOption{claude.WithVertexModel(model)}
+	if s.structuredOutputsDisabled {
+		clientOpts = append(clientOpts, claude.WithVertexStructuredOutputsDisabled())
+	}
+	if s.effort != "" {
+		clientOpts = append(clientOpts, claude.WithVertexEffort(s.effort))
+	}
+	client := claude.NewVertexClientWithAnthropicClient(&anthropicClient, clientOpts...)
+	session, err := client.NewSession(context.Background(), opts...)
+	gt.NoError(t, err).Required()
+	return session
+}
+
+func TestStructuredOutputsDisabled(t *testing.T) {
 	const systemPrompt = "You are a test assistant."
+	// The model supports structured outputs, so only the option keeps
+	// output_config.format out of the request.
+	const model = "claude-sonnet-5-5"
+	disabled := clientSettings{structuredOutputsDisabled: true}
+	question := recordedMessage{Role: "user", Content: []map[string]any{{"type": "text", "text": "question"}}}
 
-	for _, stream := range []bool{false, true} {
-		p := requestPath{name: "Vertex Generate", stream: stream}
-		if stream {
-			p.name = "Vertex Stream"
-		}
+	paths := []struct {
+		requestPath
+		newSession func(t *testing.T, baseURL, model string, s clientSettings, opts ...gollem.SessionOption) gollem.Session
+	}{
+		{requestPath{name: "API Generate", stream: false}, newAPISessionWithSettings},
+		{requestPath{name: "API Stream", stream: true}, newAPISessionWithSettings},
+		{requestPath{name: "Vertex Generate", stream: false}, newVertexSessionWithSettings},
+		{requestPath{name: "Vertex Stream", stream: true}, newVertexSessionWithSettings},
+	}
+
+	for _, p := range paths {
 		t.Run(p.name, func(t *testing.T) {
-			rs := newRecordingServer(t, "{}")
-			anthropicClient := anthropic.NewClient(
-				option.WithAPIKey("test-key"),
-				option.WithBaseURL(rs.srv.URL),
-				option.WithMaxRetries(0),
-			)
-			client := claude.NewVertexClientWithAnthropicClient(&anthropicClient,
-				claude.WithVertexModel("claude-sonnet-5-5"),
-				claude.WithVertexStructuredOutputsDisabled())
-			session, err := client.NewSession(context.Background(), gollem.WithSessionSystemPrompt(systemPrompt))
-			gt.NoError(t, err).Required()
+			t.Run("per-call schema is sent as an instruction message", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, model, disabled, gollem.WithSessionSystemPrompt(systemPrompt))
+				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				body := rs.lastBody(t)
 
-			p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
-			body := rs.lastBody(t)
+				_, hasOutputConfig := body["output_config"]
+				gt.False(t, hasOutputConfig)
+				assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
+				messages := recordedMessages(t, body)
+				gt.A(t, messages).Length(2).Required()
+				gt.Equal(t, question, messages[0])
+				text := instructionText(t, body)
+				gt.S(t, text).HasPrefix(noSchemaInstruction + "\n\nYour next response must conform to this JSON Schema:\n")
+				gt.S(t, text).Contains(`"answer"`)
+				gt.S(t, text).Contains(`"maxLength": 20`)
+			})
 
-			_, hasOutputConfig := body["output_config"]
-			gt.False(t, hasOutputConfig)
-			assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
-			gt.A(t, recordedMessages(t, body)).Length(2)
-			gt.S(t, instructionText(t, body)).Contains("Your next response must conform to this JSON Schema")
+			t.Run("effort is sent without format", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, model,
+					clientSettings{structuredOutputsDisabled: true, effort: claude.EffortHigh})
+				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				body := rs.lastBody(t)
+
+				assertJSONEqual(t, `{"effort":"high"}`, body["output_config"])
+				gt.S(t, instructionText(t, body)).Contains(`"maxLength": 20`)
+			})
+
+			t.Run("schema is sent as output_config.format without the option", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, model, clientSettings{}, gollem.WithSessionSystemPrompt(systemPrompt))
+				p.send(t, session, gollem.WithGenerateResponseSchema(structuredOutputTestSchema()))
+				body := rs.lastBody(t)
+
+				assertJSONEqual(t, `{"format":`+structuredOutputTestFormat+`}`, body["output_config"])
+				assertJSONEqual(t, `[{"type":"text","text":"`+systemPrompt+`"}]`, body["system"])
+				gt.Equal(t, []recordedMessage{question}, recordedMessages(t, body))
+			})
+
+			t.Run("tool result in a JSON session is followed by the instruction message", func(t *testing.T) {
+				rs := newRecordingServer(t, "{}")
+				session := p.newSession(t, rs.srv.URL, model, disabled,
+					gollem.WithSessionContentType(gollem.ContentTypeJSON),
+					gollem.WithSessionResponseSchema(structuredOutputTestSchema()))
+				p.sendInput(t, session, []gollem.Input{toolResultInput()})
+				body := rs.lastBody(t)
+
+				_, hasOutputConfig := body["output_config"]
+				gt.False(t, hasOutputConfig)
+				messages := recordedMessages(t, body)
+				gt.A(t, messages).Length(2).Required()
+				gt.A(t, messages[0].Content).Length(1).Required()
+				gt.Equal(t, "tool_result", messages[0].Content[0]["type"])
+				gt.S(t, instructionText(t, body)).Contains(`"maxLength": 20`)
+			})
 		})
 	}
 }
@@ -2858,8 +2948,7 @@ var instructionLiveBackends = []string{"Claude API", "Vertex AI"}
 
 // newInstructionLiveSession returns a session that sends response schemas as
 // instruction messages, with adaptive thinking on so that thinking blocks are
-// carried through the history. The Claude API client has no option for this,
-// so its session is switched with claude.DisableStructuredOutputs.
+// carried through the history.
 func newInstructionLiveSession(ctx context.Context, t *testing.T, backend, model string, opts ...gollem.SessionOption) gollem.Session {
 	t.Helper()
 	switch backend {
@@ -2871,12 +2960,12 @@ func newInstructionLiveSession(ctx context.Context, t *testing.T, backend, model
 		client, err := claude.New(ctx, apiKey,
 			claude.WithModel(model),
 			claude.WithMaxTokens(8192),
+			claude.WithStructuredOutputsDisabled(),
 			claude.WithEffort(claude.EffortXHigh),
 			claude.WithAdaptiveThinking(claude.ThinkingDisplaySummarized))
 		gt.NoError(t, err).Required()
 		session, err := client.NewSession(ctx, opts...)
 		gt.NoError(t, err).Required()
-		claude.DisableStructuredOutputs(session)
 		return session
 	case "Vertex AI":
 		projectID, ok := os.LookupEnv("TEST_CLAUDE_VERTEX_AI_PROJECT_ID")

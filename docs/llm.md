@@ -261,6 +261,18 @@ A model that is not in the table — a model released after this table was writt
 
 **Note**: `max_tokens` is a ceiling, not a reservation — it does not by itself make a request slower or more expensive. But a response that actually approaches the ceiling takes time to generate, and `Generate` waits for the whole response. The default request timeout is 30 seconds (`WithTimeout`); raise it before expecting long outputs. The timeout also covers a streamed response from the request to its last event, so a `Stream` call that runs longer is cut off as well.
 
+#### Structured Outputs
+
+By default, a response schema is sent as structured outputs (`output_config.format`) to models that support it, and the API constrains decoding to the schema. If you prefer the schema stated in the conversation over constrained decoding, disable structured outputs so that the schema is sent in a user message instead:
+
+```go
+client, err := claude.New(ctx, apiKey,
+    claude.WithStructuredOutputsDisabled(),
+)
+```
+
+With structured outputs disabled, no `output_config.format` is sent, the system prompt and tool list stay the same with or without a schema, and the schema message is kept in the history. `output_config.effort` is still sent when `WithEffort` is set. For Vertex AI, use `claude.WithVertexStructuredOutputsDisabled`, which behaves the same way. See [Provider-Specific Behavior](schema.md#claude).
+
 #### Thinking and Issuer Scope
 
 The text of each thinking block is returned in `Response.Thoughts`. A block whose text the API omitted, and a redacted thinking block, add no element; their types are still listed in `Response.OtherBlockTypes` (see [Finish Reason](#finish-reason)). `Stream` uses the streaming Messages API and returns thinking and text deltas and tool calls as they arrive. Thinking blocks and their signatures are kept in the history in both `Generate` and `Stream`.
@@ -358,7 +370,7 @@ client, err := claude.NewWithVertex(ctx, region, projectID,
 )
 ```
 
-With structured outputs disabled, the system prompt and tool list stay the same with or without a schema, and the schema message is kept in the history. See [Provider-Specific Behavior](schema.md#claude).
+`WithVertexStructuredOutputsDisabled` behaves the same as `claude.WithStructuredOutputsDisabled` — see [Structured Outputs](#structured-outputs) above.
 
 #### Issuer Scope
 
