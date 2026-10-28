@@ -103,7 +103,15 @@ result, err := agent.Execute(ctx, gollem.Text("Analyze the logs"))
 // Trace is automatically saved to ./traces/{trace_id}.json on Finish
 ```
 
-`FileRepository` writes each trace as a JSON file. You can implement the `Repository` interface for custom storage (database, cloud storage, etc.):
+`FileRepository` saves each trace as `{trace_id}.json` in the given directory. A custom trace ID may come from an untrusted source such as a request header, so `Save` rejects any trace ID that cannot be used as a single file name in that directory:
+
+- an empty trace ID
+- a trace ID that contains `/` or `\`
+- a trace ID that `filepath.IsLocal` rejects. On Windows, this includes IDs that contain `:` and reserved device names such as `NUL`.
+
+`Save` also refuses to write through a symbolic link that is absolute or points outside the directory. In these cases, `Save` returns an error and writes no file. When the recorder is attached with `gollem.WithTrace`, `Agent.Execute` logs this error as a warning and does not return it. If every trace must be saved, use the default UUID, or build custom trace IDs only from letters, digits, `-`, and `_`.
+
+You can implement the `Repository` interface for custom storage (database, cloud storage, etc.):
 
 ```go
 type Repository interface {
