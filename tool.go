@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/m-mizutani/goerr/v2"
 )
@@ -22,6 +24,8 @@ type ToolSpec struct {
 
 // ValidateArgs validates the given arguments against the tool's parameter specifications.
 // It checks all parameters and collects all validation errors.
+// An argument key that differs from a parameter name only in letter case is
+// rejected, at any depth; see Parameter.ValidateValue.
 // Returns nil if all arguments are valid.
 func (s *ToolSpec) ValidateArgs(args map[string]any) error {
 	// Sort parameter names for deterministic error ordering
@@ -31,7 +35,7 @@ func (s *ToolSpec) ValidateArgs(args map[string]any) error {
 	}
 	slices.Sort(names)
 
-	var errs []error
+	errs := caseVariantKeyErrors("", s.Parameters, args)
 	for _, name := range names {
 		param := s.Parameters[name]
 		if err := param.ValidateValue(name, args[name]); err != nil {
@@ -345,6 +349,10 @@ func (p *Parameter) validateAnyOf() error {
 
 // ValidateValue validates a value against this parameter's specification.
 // It checks required, type, enum, and constraint validations.
+// For an object, a key that is not a name in Properties but differs from one
+// only in letter case is rejected, even when AdditionalProperties is set:
+// encoding/json would decode its value into the field of that name without the
+// value having been validated.
 // Returns nil if the value is valid, or an error describing the validation failure.
 func (p *Parameter) ValidateValue(name string, value any) error {
 	eb := goerr.NewBuilder(goerr.V("parameter", name))
@@ -483,6 +491,9 @@ func (p *Parameter) ValidateValue(name string, value any) error {
 		if !ok {
 			return eb.Wrap(ErrInvalidParameter, "expected object type", goerr.V("actual", value))
 		}
+		if errs := caseVariantKeyErrors(name, p.Properties, obj); len(errs) > 0 {
+			return errs[0]
+		}
 		// Validate each property if Properties schema is defined
 		for _, propName := range slices.Sorted(maps.Keys(p.Properties)) {
 			if err := p.Properties[propName].ValidateValue(name+"."+propName, obj[propName]); err != nil {
@@ -510,6 +521,75 @@ func (p *Parameter) ValidateValue(name string, value any) error {
 	}
 
 	return nil
+}
+
+// caseVariantKeyErrors returns an error for each key of obj, in key order, that
+// is not a name in declared but that encoding/json matches to one of them.
+// encoding/json matches an object key to a struct field without regard to
+// letter case, while validation looks a value up by its exact name. Without
+// this check, {"Role": "admin"} for a parameter "role" with an enum would pass
+// validation as "role omitted" and still be decoded into the Role field. name
+// is the path of obj; it is empty for the top level of tool arguments.
+func caseVariantKeyErrors(name string, declared map[string]*Parameter, obj map[string]any) []error {
+	if len(declared) == 0 {
+		return nil
+	}
+	byFolded := make(map[string]string, len(declared))
+	for _, declaredName := range slices.Sorted(maps.Keys(declared)) {
+		folded := foldJSONName(declaredName)
+		if _, ok := byFolded[folded]; !ok {
+			byFolded[folded] = declaredName
+		}
+	}
+
+	var errs []error
+	for _, key := range slices.Sorted(maps.Keys(obj)) {
+		if _, ok := declared[key]; ok {
+			continue
+		}
+		declaredName, ok := byFolded[foldJSONName(key)]
+		if !ok {
+			continue
+		}
+		path := key
+		if name != "" {
+			path = name + "." + key
+		}
+		errs = append(errs, goerr.Wrap(ErrInvalidParameter,
+			fmt.Sprintf("key %q differs from declared parameter %q only in letter case; use %q", path, declaredName, declaredName),
+			goerr.V("parameter", path), goerr.V("declared", declaredName)))
+	}
+	return errs
+}
+
+// foldJSONName folds s the way encoding/json folds an object key before it
+// matches the key to a struct field (foldName in encoding/json/fold.go): an
+// ASCII letter becomes upper case, and any other rune becomes the smallest rune
+// of its unicode.SimpleFold orbit. encoding/json treats two names as the same
+// field exactly when their folded forms are equal, so "ſ" (U+017F) matches "s"
+// and the Kelvin sign (U+212A) matches "k".
+func foldJSONName(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < utf8.RuneSelf {
+			if 'a' <= r && r <= 'z' {
+				r -= 'a' - 'A'
+			}
+			b.WriteRune(r)
+			continue
+		}
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				r = next
+				break
+			}
+			r = next
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // validateAnyOfValue accepts value when it matches at least one element of

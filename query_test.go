@@ -159,6 +159,29 @@ func TestQueryRetryExhausted(t *testing.T) {
 	gt.Value(t, callCount).Equal(3)
 }
 
+// encoding/json decodes "Status" into the field named "status", so a response
+// using that key must fail validation rather than deliver an unvalidated value.
+func TestQueryRejectsCaseVariantKey(t *testing.T) {
+	var retryPrompt string
+	callCount := 0
+	client := setupQueryMock(t, func(ctx context.Context, input []gollem.Input, opts ...gollem.GenerateOption) (*gollem.Response, error) {
+		callCount++
+		if callCount == 1 {
+			return &gollem.Response{Texts: []string{`{"status":"active","Status":"deleted"}`}}, nil
+		}
+		if text, ok := input[0].(gollem.Text); ok {
+			retryPrompt = string(text)
+		}
+		return &gollem.Response{Texts: []string{`{"status":"inactive"}`}}, nil
+	})
+
+	resp, err := gollem.Query[testQueryResultWithConstraints](context.Background(), client, "test")
+	gt.NoError(t, err)
+	gt.Value(t, callCount).Equal(2)
+	gt.Value(t, resp.Data.Status).Equal("inactive")
+	gt.S(t, retryPrompt).Contains(`key "root.Status" differs from declared parameter "status"`)
+}
+
 func TestQueryEmptyResponse(t *testing.T) {
 	client := setupQueryMock(t, func(ctx context.Context, input []gollem.Input, opts ...gollem.GenerateOption) (*gollem.Response, error) {
 		return &gollem.Response{

@@ -446,6 +446,110 @@ func TestNewToolWithMockLLM(t *testing.T) {
 	})
 }
 
+// encoding/json decodes a key into a struct field without regard to letter case,
+// so a typed tool must not decode a key that differs from a schema name only in
+// letter case: its value would reach the handler without being validated.
+func TestTypedToolRejectsCaseVariantKeys(t *testing.T) {
+	type grant struct {
+		Role string `json:"role" enum:"user,guest"`
+	}
+	type setRoleArgs struct {
+		Role   string  `json:"role" enum:"user,guest"`
+		Grants []grant `json:"grants"`
+	}
+
+	newSetRole := func(t *testing.T, called *bool) gollem.Tool {
+		t.Helper()
+		tool, err := gollem.NewTool("set_role", "Sets the role",
+			func(_ context.Context, _ setRoleArgs) (addResult, error) {
+				*called = true
+				return addResult{}, nil
+			})
+		gt.NoError(t, err)
+		return tool
+	}
+
+	t.Run("Run rejects a capitalized key without calling the handler", func(t *testing.T) {
+		called := false
+		_, err := newSetRole(t, &called).Run(t.Context(), map[string]any{"Role": "admin"})
+		gt.Error(t, err)
+		gt.True(t, errors.Is(err, gollem.ErrToolArgsValidation))
+		gt.S(t, err.Error()).Contains(`key "Role" differs from declared parameter "role"`)
+		gt.False(t, called)
+	})
+
+	t.Run("Run rejects a case variant inside an array of structs", func(t *testing.T) {
+		called := false
+		_, err := newSetRole(t, &called).Run(t.Context(), map[string]any{
+			"grants": []any{map[string]any{"Role": "admin"}},
+		})
+		gt.Error(t, err)
+		gt.S(t, err.Error()).Contains(`key "grants[0].Role" differs from declared parameter "role"`)
+		gt.False(t, called)
+	})
+
+	t.Run("Run rejects a case variant held in a typed Go slice of maps", func(t *testing.T) {
+		// A caller running the tool directly can pass Go-typed values that
+		// json.Marshal encodes as objects; the check must see them too.
+		called := false
+		_, err := newSetRole(t, &called).Run(t.Context(), map[string]any{
+			"grants": []map[string]string{{"Role": "admin"}},
+		})
+		gt.Error(t, err)
+		gt.S(t, err.Error()).Contains(`key "grants[0].Role" differs from declared parameter "role"`)
+		gt.False(t, called)
+	})
+
+	t.Run("Run accepts declared keys", func(t *testing.T) {
+		called := false
+		_, err := newSetRole(t, &called).Run(t.Context(), map[string]any{
+			"role":   "user",
+			"grants": []any{map[string]any{"role": "guest"}},
+		})
+		gt.NoError(t, err)
+		gt.True(t, called)
+	})
+
+	runAgent := func(t *testing.T, args map[string]any, options ...gollem.Option) bool {
+		t.Helper()
+		called := false
+		tool := newSetRole(t, &called)
+
+		callCount := 0
+		mockClient := &mock.LLMClientMock{
+			NewSessionFunc: func(_ context.Context, _ ...gollem.SessionOption) (gollem.Session, error) {
+				return &mock.SessionMock{
+					GenerateFunc: func(_ context.Context, _ []gollem.Input, _ ...gollem.GenerateOption) (*gollem.Response, error) {
+						callCount++
+						if callCount == 1 {
+							return &gollem.Response{
+								FunctionCalls: []*gollem.FunctionCall{
+									{ID: "call_set_role_1", Name: "set_role", Arguments: args},
+								},
+							}, nil
+						}
+						return &gollem.Response{Texts: []string{"done"}}, nil
+					},
+				}, nil
+			},
+		}
+
+		options = append([]gollem.Option{gollem.WithTools(tool), gollem.WithLoopLimit(5)}, options...)
+		agent := gollem.New(mockClient, options...)
+		_, err := agent.Execute(t.Context(), gollem.Text("set role"))
+		gt.NoError(t, err)
+		return called
+	}
+
+	t.Run("agent blocks a capitalized key before the handler runs", func(t *testing.T) {
+		gt.False(t, runAgent(t, map[string]any{"Role": "admin"}))
+	})
+
+	t.Run("agent blocks a capitalized key with validation disabled", func(t *testing.T) {
+		gt.False(t, runAgent(t, map[string]any{"Role": "admin"}, gollem.WithDisableArgsValidation()))
+	})
+}
+
 // A typed tool returning an int64 wider than float64 must reach the LLM with the value it
 // returned. toResultMap used to decode through a plain map[string]any, which rounded it.
 func TestTypedToolResultPreservesWideIntegers(t *testing.T) {

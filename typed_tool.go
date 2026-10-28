@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
+	"strconv"
 
 	"github.com/gollem-dev/gollem/internal/jsonutil"
 	"github.com/m-mizutani/goerr/v2"
@@ -107,11 +110,28 @@ func (t *typedTool[In, Out]) Run(ctx context.Context, args map[string]any) (map[
 	// cannot drift between the schema and the decode. Argument validation against
 	// the schema already runs before Run (see executeToolCall); this decode is the
 	// type-level safety net behind it.
+	//
 	var in In
 	raw, err := json.Marshal(args)
 	if err != nil {
 		return nil, goerr.Wrap(err, "failed to encode tool arguments", goerr.V("tool", t.name))
 	}
+
+	// encoding/json matches keys to fields without regard to letter case, so a
+	// key such as "Role" would be decoded into the field named "role" by the
+	// schema. Such keys are rejected here as well as in ValidateArgs, because Run
+	// is also reached without ValidateArgs (WithDisableArgsValidation, or a caller
+	// running the tool directly). The check reads the encoded bytes rather than
+	// args, so a value args holds as a typed Go map or slice (for example
+	// []map[string]string) is checked in the same form the decode below reads.
+	encoded, err := jsonutil.DecodeObject(raw)
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to decode encoded tool arguments", goerr.V("tool", t.name))
+	}
+	if errs := caseVariantKeyErrorsIn("", &Parameter{Type: TypeObject, Properties: t.params}, encoded); len(errs) > 0 {
+		return nil, &toolArgsValidationError{toolName: t.name, errs: errs}
+	}
+
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, goerr.Wrap(err, "failed to decode tool arguments", goerr.V("tool", t.name))
 	}
@@ -122,6 +142,59 @@ func (t *typedTool[In, Out]) Run(ctx context.Context, args map[string]any) (map[
 	}
 
 	return toResultMap(out)
+}
+
+// caseVariantKeyErrorsIn returns the caseVariantKeyErrors of every object in
+// value, at any depth, that p describes. value is expected in the form
+// encoding/json decodes into an interface ([]any and map[string]any). A value
+// whose type does not match p is skipped: reporting the type mismatch is
+// ValidateValue's job, and the decode into In rejects it anyway. For AnyOf, the errors of the first element reporting any
+// are returned, so a key is rejected when any element would decode it into a
+// field it was not sent under; ToSchema never sets AnyOf, so a typed tool does
+// not reach that branch today.
+func caseVariantKeyErrorsIn(name string, p *Parameter, value any) []error {
+	if p == nil || value == nil {
+		return nil
+	}
+
+	for _, alt := range p.AnyOf {
+		if errs := caseVariantKeyErrorsIn(name, alt, value); len(errs) > 0 {
+			return errs
+		}
+	}
+
+	switch p.Type {
+	case TypeArray:
+		arr, ok := value.([]any)
+		if !ok {
+			return nil
+		}
+		var errs []error
+		for i, item := range arr {
+			errs = append(errs, caseVariantKeyErrorsIn(name+"["+strconv.Itoa(i)+"]", p.Items, item)...)
+		}
+		return errs
+
+	case TypeObject:
+		obj, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		errs := caseVariantKeyErrors(name, p.Properties, obj)
+		for _, key := range slices.Sorted(maps.Keys(obj)) {
+			path := key
+			if name != "" {
+				path = name + "." + key
+			}
+			if prop, ok := p.Properties[key]; ok {
+				errs = append(errs, caseVariantKeyErrorsIn(path, prop, obj[key])...)
+			} else {
+				errs = append(errs, caseVariantKeyErrorsIn(path, p.AdditionalProperties, obj[key])...)
+			}
+		}
+		return errs
+	}
+	return nil
 }
 
 // buildToolSchema builds the input schema from In and verifies both In and Out.
