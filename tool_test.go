@@ -1,6 +1,7 @@
 package gollem_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -565,6 +566,187 @@ func TestToolSpecValidateArgs(t *testing.T) {
 			"another_unused": 42,
 		})
 		gt.NoError(t, err)
+	})
+}
+
+// encoding/json decodes a key into a struct field without regard to letter case,
+// while ValidateArgs looks values up by exact name. These tests pin that a key
+// differing from a declared name only in letter case is rejected, so its value
+// cannot reach a decoded struct without being validated.
+func TestToolSpecValidateArgsCaseVariantKeys(t *testing.T) {
+	roleSpec := gollem.ToolSpec{
+		Name: "set_role",
+		Parameters: map[string]*gollem.Parameter{
+			"role": {Type: gollem.TypeString, Enum: []string{"user", "guest"}},
+		},
+	}
+
+	t.Run("optional enum parameter sent under a capitalized key is rejected", func(t *testing.T) {
+		err := roleSpec.ValidateArgs(map[string]any{"Role": "admin"})
+		gt.Error(t, err)
+		gt.True(t, errors.Is(err, gollem.ErrToolArgsValidation))
+		gt.S(t, err.Error()).Contains(`key "Role" differs from declared parameter "role" only in letter case`)
+	})
+
+	t.Run("declared key and unrelated extra keys still pass", func(t *testing.T) {
+		gt.NoError(t, roleSpec.ValidateArgs(map[string]any{"role": "user", "note": "x"}))
+	})
+
+	t.Run("case variant sent next to a valid declared key is rejected", func(t *testing.T) {
+		// json.Marshal sorts keys, so "filepath" is written after "filePath" and
+		// the decoder would assign its value last.
+		spec := gollem.ToolSpec{
+			Name: "read_file",
+			Parameters: map[string]*gollem.Parameter{
+				"filePath": {Type: gollem.TypeString, Required: true, Pattern: "^/srv/data/[a-z0-9]+$"},
+			},
+		}
+		gt.NoError(t, spec.ValidateArgs(map[string]any{"filePath": "/srv/data/ok"}))
+
+		err := spec.ValidateArgs(map[string]any{
+			"filePath": "/srv/data/ok",
+			"filepath": "../../etc/passwd",
+		})
+		gt.Error(t, err)
+		gt.True(t, errors.Is(err, gollem.ErrToolArgsValidation))
+		gt.S(t, err.Error()).Contains(`key "filepath" differs from declared parameter "filePath"`)
+	})
+
+	t.Run("case variant of a nested property is rejected", func(t *testing.T) {
+		spec := gollem.ToolSpec{
+			Name: "move",
+			Parameters: map[string]*gollem.Parameter{
+				"addr": {
+					Type: gollem.TypeObject,
+					Properties: map[string]*gollem.Parameter{
+						"city": {Type: gollem.TypeString, Enum: []string{"Tokyo"}},
+					},
+				},
+			},
+		}
+		gt.NoError(t, spec.ValidateArgs(map[string]any{"addr": map[string]any{"city": "Tokyo"}}))
+
+		err := spec.ValidateArgs(map[string]any{"addr": map[string]any{"City": "Paris"}})
+		gt.Error(t, err)
+		gt.True(t, errors.Is(err, gollem.ErrToolArgsValidation))
+		gt.S(t, err.Error()).Contains(`key "addr.City" differs from declared parameter "city"`)
+	})
+
+	t.Run("case variant inside an array of objects is rejected", func(t *testing.T) {
+		spec := gollem.ToolSpec{
+			Name: "grant",
+			Parameters: map[string]*gollem.Parameter{
+				"grants": {
+					Type: gollem.TypeArray,
+					Items: &gollem.Parameter{
+						Type: gollem.TypeObject,
+						Properties: map[string]*gollem.Parameter{
+							"role": {Type: gollem.TypeString, Enum: []string{"user"}},
+						},
+					},
+				},
+			},
+		}
+		err := spec.ValidateArgs(map[string]any{
+			"grants": []any{map[string]any{"role": "user"}, map[string]any{"ROLE": "admin"}},
+		})
+		gt.Error(t, err)
+		gt.S(t, err.Error()).Contains(`key "grants[1].ROLE" differs from declared parameter "role"`)
+	})
+
+	t.Run("keys of a map parameter are not compared to each other", func(t *testing.T) {
+		// A map decodes every key as its own entry, so "Env" and "env" are two
+		// distinct values there, not a case variant of a declared name.
+		spec := gollem.ToolSpec{
+			Name: "label",
+			Parameters: map[string]*gollem.Parameter{
+				"labels": {Type: gollem.TypeObject, AdditionalProperties: &gollem.Parameter{Type: gollem.TypeInteger}},
+			},
+		}
+		gt.NoError(t, spec.ValidateArgs(map[string]any{
+			"labels": map[string]any{"Env": float64(1), "env": float64(2)},
+		}))
+	})
+
+	t.Run("rejects exactly the keys encoding/json decodes into the declared field", func(t *testing.T) {
+		// The expectation is computed from encoding/json itself, so the check
+		// follows the decoder's folding, including the non-ASCII runes it folds
+		// to ASCII letters: "ſ" (U+017F) to "s" and the Kelvin sign (U+212A) to "k".
+		type target struct {
+			Status string `json:"status"`
+			Kind   string `json:"kind"`
+		}
+		spec := gollem.ToolSpec{
+			Name: "classify",
+			Parameters: map[string]*gollem.Parameter{
+				"status": {Type: gollem.TypeString, Enum: []string{"open"}},
+				"kind":   {Type: gollem.TypeString, Enum: []string{"bug"}},
+			},
+		}
+
+		keys := []string{
+			"status", "Status", "STATUS", "ſtatus", "statuſ", "stätus", "İstatus",
+			"kind", "Kind", "Kind", "kınd", "kinds",
+		}
+		for _, key := range keys {
+			t.Run(key, func(t *testing.T) {
+				raw, err := json.Marshal(map[string]string{key: "injected"})
+				gt.NoError(t, err)
+				var decoded target
+				gt.NoError(t, json.Unmarshal(raw, &decoded))
+				decodedIntoField := decoded.Status == "injected" || decoded.Kind == "injected"
+				exact := key == "status" || key == "kind"
+				if key == "ſtatus" || key == "statuſ" || key == "Kind" {
+					// Guards the premise: these keys must take the folded-rune branch.
+					gt.True(t, decodedIntoField)
+				}
+
+				err = spec.ValidateArgs(map[string]any{key: "injected"})
+				switch {
+				case exact:
+					// The value is validated under its own name and fails the enum.
+					gt.Error(t, err)
+					gt.S(t, err.Error()).NotContains("only in letter case")
+				case decodedIntoField:
+					gt.Error(t, err)
+					gt.S(t, err.Error()).Contains("only in letter case")
+				default:
+					gt.NoError(t, err)
+				}
+			})
+		}
+	})
+}
+
+func TestValidateValueCaseVariantKeys(t *testing.T) {
+	p := &gollem.Parameter{
+		Type: gollem.TypeObject,
+		Properties: map[string]*gollem.Parameter{
+			"name": {Type: gollem.TypeString, Required: true},
+		},
+	}
+
+	t.Run("declared key passes", func(t *testing.T) {
+		gt.NoError(t, p.ValidateValue("root", map[string]any{"name": "a"}))
+	})
+
+	t.Run("case variant is rejected before the missing required property", func(t *testing.T) {
+		err := p.ValidateValue("root", map[string]any{"Name": "a"})
+		gt.Error(t, err)
+		gt.True(t, errors.Is(err, gollem.ErrInvalidParameter))
+		gt.S(t, err.Error()).Contains(`key "root.Name" differs from declared parameter "name"`)
+	})
+
+	t.Run("case variant is rejected even when additionalProperties is set", func(t *testing.T) {
+		withMap := &gollem.Parameter{
+			Type: gollem.TypeObject,
+			Properties: map[string]*gollem.Parameter{
+				"name": {Type: gollem.TypeString},
+			},
+			AdditionalProperties: &gollem.Parameter{Type: gollem.TypeString},
+		}
+		gt.NoError(t, withMap.ValidateValue("root", map[string]any{"name": "a", "other": "b"}))
+		gt.Error(t, withMap.ValidateValue("root", map[string]any{"NAME": "a"}))
 	})
 }
 

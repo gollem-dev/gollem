@@ -82,6 +82,15 @@ if err != nil {
   safety net behind it. If you disable it with `WithDisableArgsValidation`, only the
   typed decode remains: it enforces field *types*, but not `required`/`enum`/`min`/`max`,
   so a missing field arrives as its zero value.
+- An argument key that differs from a declared parameter name only in letter case
+  (for example `"Role"` for `json:"role"`, at any depth) is rejected, and the error
+  tells the model which name to use. `encoding/json` matches keys to struct fields
+  without regard to letter case, so such a key would otherwise put a value that was
+  never validated into the field. Argument validation rejects it, and the typed
+  decode rejects it as well, so the check also applies with
+  `WithDisableArgsValidation`. If you decode `args` into a struct yourself with
+  `encoding/json`, keep argument validation enabled for the same protection. Keys
+  that match no parameter name in any letter case are still ignored.
 
 `NewTool` returns an error when `In`/`Out` cannot form a valid schema (for example
 a malformed struct tag, or a scalar type). For static registration, use
