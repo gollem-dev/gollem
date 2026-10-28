@@ -81,6 +81,109 @@ func TestFileRepositoryCreatesDirectory(t *testing.T) {
 	gt.NoError(t, err)
 }
 
+func TestFileRepositoryTraceIDAsFileName(t *testing.T) {
+	type testCase struct {
+		traceID string
+		valid   bool
+	}
+
+	runTest := func(tc testCase) func(t *testing.T) {
+		return func(t *testing.T) {
+			// The trace directory is nested so that a "../" path would land
+			// in parent, which the test can inspect.
+			parent := t.TempDir()
+			dir := filepath.Join(parent, "traces")
+			repo := trace.NewFileRepository(dir)
+
+			err := repo.Save(context.Background(), &trace.Trace{TraceID: tc.traceID})
+
+			if tc.valid {
+				gt.NoError(t, err)
+				_, err := os.Stat(filepath.Join(dir, tc.traceID+".json"))
+				gt.NoError(t, err)
+				return
+			}
+
+			gt.Error(t, err)
+			var written []string
+			walkErr := filepath.WalkDir(parent, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !d.IsDir() {
+					written = append(written, path)
+				}
+				return nil
+			})
+			gt.NoError(t, walkErr)
+			gt.A(t, written).Length(0)
+		}
+	}
+
+	t.Run("parent directory traversal is rejected", runTest(testCase{traceID: "../escape"}))
+	t.Run("deep parent directory traversal is rejected", runTest(testCase{traceID: "../../config/app"}))
+	t.Run("subdirectory is rejected", runTest(testCase{traceID: "sub/trace"}))
+	t.Run("backslash is rejected", runTest(testCase{traceID: `..\escape`}))
+	t.Run("absolute path is rejected", runTest(testCase{traceID: "/tmp/escape"}))
+	t.Run("empty trace ID is rejected", runTest(testCase{traceID: ""}))
+	t.Run("UUID is accepted", runTest(testCase{traceID: "0192f6c4-7b5e-7c3a-9d2e-1a2b3c4d5e6f", valid: true}))
+	t.Run("dots inside the trace ID are accepted", runTest(testCase{traceID: "req..v1.2", valid: true}))
+}
+
+func TestFileRepositorySymlink(t *testing.T) {
+	type testCase struct {
+		// linkTarget returns the symbolic link target for a link created in
+		// parent/traces, where parent/outside/target.json and
+		// parent/traces/inside/target.json already exist.
+		linkTarget func(parent string) string
+		valid      bool
+	}
+
+	runTest := func(tc testCase) func(t *testing.T) {
+		return func(t *testing.T) {
+			parent := t.TempDir()
+			dir := filepath.Join(parent, "traces")
+			outside := filepath.Join(parent, "outside", "target.json")
+			inside := filepath.Join(dir, "inside", "target.json")
+			for _, p := range []string{outside, inside} {
+				gt.NoError(t, os.MkdirAll(filepath.Dir(p), 0750))
+				gt.NoError(t, os.WriteFile(p, []byte("original"), 0600))
+			}
+			gt.NoError(t, os.Symlink(tc.linkTarget(parent), filepath.Join(dir, "linked.json")))
+
+			repo := trace.NewFileRepository(dir)
+			err := repo.Save(context.Background(), &trace.Trace{TraceID: "linked"})
+
+			outsideData, readErr := os.ReadFile(outside)
+			gt.NoError(t, readErr)
+			gt.Equal(t, string(outsideData), "original")
+
+			if !tc.valid {
+				gt.Error(t, err)
+				return
+			}
+
+			gt.NoError(t, err)
+			var loaded trace.Trace
+			insideData, readErr := os.ReadFile(inside)
+			gt.NoError(t, readErr)
+			gt.NoError(t, json.Unmarshal(insideData, &loaded))
+			gt.Equal(t, loaded.TraceID, "linked")
+		}
+	}
+
+	t.Run("absolute link outside the directory is rejected", runTest(testCase{
+		linkTarget: func(parent string) string { return filepath.Join(parent, "outside", "target.json") },
+	}))
+	t.Run("relative link outside the directory is rejected", runTest(testCase{
+		linkTarget: func(string) string { return filepath.Join("..", "outside", "target.json") },
+	}))
+	t.Run("relative link inside the directory is followed", runTest(testCase{
+		linkTarget: func(string) string { return filepath.Join("inside", "target.json") },
+		valid:      true,
+	}))
+}
+
 func TestFileRepositoryWithChildren(t *testing.T) {
 	dir := t.TempDir()
 	repo := trace.NewFileRepository(dir)
